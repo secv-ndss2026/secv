@@ -1,7 +1,7 @@
 # Artifact for NDSS2026 SECV: Securing Connected Vehicles with Hardware Trust Anchors.
 This is the open-source for the SECV: Securing Connected Vehicles with Hardware Trust Anchors, NDSS 2026 Fall paper.
 Here, we will provide code modifications for the core parts of the paper and the instructions on building SECV for S32G3. 
-We provide code patches showing the major changes made to help reduce the time of search. The major components here are the Linux Kernel, the OPTEE-OS, drivers, and Arm Trusted Firmware.
+We provide code patches showing the major changes made to help reduce the time of search time. The major components here are the Linux Kernel (NW OS), the OPTEE-OS (Trusted OS), drivers (NW & SW components), and Arm Trusted Firmware (The Security Monitor).
 
 ## Caution and Disclaimer:
 This is only a prototype and is not production-ready. We only provide a proof of concept for the research conducted, as presented in the paper.
