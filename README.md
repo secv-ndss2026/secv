@@ -12,7 +12,7 @@ The image can be built with Yocto as follows, and at least one should have `repo
 - ***Build Environment:*** Ubuntu 20.04
 - ***Hardware Requirements:*** At least 16GB RAM, at least 4 CPU Cores, and 70GB or more disk space.
 
-### Initial Setup
+### Initial Setup and obtaining the baseline code-base
 ```sh
 $ mkdir nxp-yocto-goldvip
 $ cd nxp-yocto-golvip
