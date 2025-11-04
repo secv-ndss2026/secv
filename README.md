@@ -32,4 +32,6 @@ Run the following command to test-build. This should download most of the needed
 ```sh
 $ bitbake fsl-image-goldvip
 ```
-For the above build to succeed, one needs certain proprietary NXP binaries. These include the bootloader binaries, the HSM (HSE) library binaries, etc. We include a manual from NXP for how to handle this.
+For the above build to succeed, one needs certain proprietary NXP binaries. These include the bootloader binaries, the HSM (HSE) library binaries, etc. We include a manual from NXP on how to handle this.
+
+During the build, the GoldVIP image requires `openjdk8`, but this fails to download automatically.
