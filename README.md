@@ -16,7 +16,7 @@ The image can be built with Yocto as follows, and at least one should have `repo
 ```sh
 $ mkdir nxp-yocto-goldvip
 $ cd nxp-yocto-golvip
-$ repo init -b develop -m default.xml -u https://github.com/nxp-auto-goldvip/gvip-manifests
+$ repo init -b release/goldvip-1.13.0 -m default.xml -u https://github.com/nxp-auto-goldvip/gvip-manifests
 $ repo sync
 $ ./sources/meta-alb/scripts/host-prepare.sh
 $ sudo apt-get install libssl-dev
@@ -34,4 +34,28 @@ $ bitbake fsl-image-goldvip
 ```
 For the above build to succeed, one needs certain proprietary NXP binaries. These include the bootloader binaries, the HSM (HSE) library binaries, etc. We include a manual from NXP on how to handle this.
 
-During the build, the GoldVIP image requires `openjdk8`, but this fails to download automatically.
+During the build, the GoldVIP image requires `openjdk8`, but this fails to download automatically. As a workaround, we download the following packages using `wget` into the `downloads` folder.
+
+```sh
+https://mirrors.kernel.org/yocto-sources/openjdk-f89009ada191.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-corba-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-corba-jdk8u272-ga.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-hotspot-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-hotspot-jdk8u272-ga.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jaxp-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jaxp-jdk8u272-ga.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jaxws-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jaxws-jdk8u272-ga.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jdk-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jdk-jdk8u272-ga.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jdk8u-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-jdk8u-jdk8u272-ga.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-langtools-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-langtools-jdk8u272-ga.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-aarch64-shenandoah-jdk8u272-b10.tar.bz2
+https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-jdk8u272-ga.tar.bz2
+```
+After that, the default build should complete successfully.
+
+### SECV Baseline Building:
+To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository.
