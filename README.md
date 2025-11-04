@@ -57,5 +57,5 @@ https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-jdk8u272-ga.tar.bz
 ```
 After that, the default build should complete successfully.
 
-### SECV Baseline Building:
+#### SECV Baseline Building:
 To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository.
