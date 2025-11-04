@@ -7,3 +7,18 @@ This is only a prototype and is not production-ready. We only provide a proof of
 Additionally, especially for S32G3, some of the required firmware requires Licenses, and thus, we are not permitted to distribute them. But one may obtain most of the needed firmware with a free account on NXP.
 
 ## Building the default S32G3 Image:
+The image can be built with Yocto as follows, and at least one should have `repo` installed:
+- ***Build Environment:*** Ubuntu 20.04
+- ***Hardware Requirements:*** At least 16GB RAM, at least 4 CPU Cores, and 70GB or more disk space.
+```sh
+$ mkdir nxp-yocto-goldvip
+$ cd nxp-yocto-golvip
+$ repo init -b develop -m default.xml -u https://github.com/nxp-auto-goldvip/gvip-manifests
+$ repo sync
+$ ./sources/meta-alb/scripts/host-prepare.sh
+$ sudo apt-get install libssl-dev
+# We don't need to use a hypervisor, so we went with goldvip-no-hv
+$ source nxp-setup-alb.sh -D fsl-goldvip-no-hv \
+ -m s32g399ardb3 \
+ -e "meta-aws meta-java meta-vip"
+```
