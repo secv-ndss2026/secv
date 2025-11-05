@@ -59,3 +59,9 @@ After that, the default build should complete successfully.
 
 #### SECV Baseline Building:
 To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository.
+
+
+## IMA Setup:
+#### How to Sign a Test Program
+#### How to Append Permitted Messages
+#### Related Keys
