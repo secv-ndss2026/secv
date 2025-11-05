@@ -59,6 +59,10 @@ After that, the default build should complete successfully.
 
 #### SECV Baseline Building:
 To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository.
+After the image is built, one may find it at build/tmp/deploy/images/s32g3/....sdcard
+This is the baseline image against which we compare SECV in terms of performance, communication latency and resource usage.
+In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board), via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
+We include scripts to reproduce the LMBench experiments, the communication performance, the system performance (LMBench), and the IVN gateway resource usage. The scripts are identifiable by their filenames.
 
 
 ## IMA Setup:
