@@ -9,7 +9,6 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 
 
 ## Architecture
-We provided three linux side patches 
 ```bash
 ├── patches
 │   └── linux
@@ -105,5 +104,5 @@ This experiment employs the publicly available CAN message dataset released by [
 #### Communication Performance
 Run:
 ```sh
-./latency.py
+$python latency.py candump.txt
 ```
