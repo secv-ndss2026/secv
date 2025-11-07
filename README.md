@@ -7,6 +7,23 @@ We provide code patches showing the major changes made to help reduce the time o
 This is only a prototype and is not production-ready. We only provide a proof of concept for the research conducted, as presented in the paper.
 Additionally, especially for S32G3, some of the required firmware requires Licenses, and thus, we are not permitted to distribute them. But one may obtain most of the needed firmware with a free account on NXP.
 
+
+## Architecture
+```bash
+├── patches
+│   └── linux
+│       ├── ima-auth.patch
+│       ├── secv-flexcan-drivers.patch
+│       └── secv-kernel-isolation.patch
+├── scripts
+│   ├── show_lmbench_result.sh
+│   ├── canperf.sh
+│   └── real_can.sh
+└── GoldVIP-S32G3-1.13.0-User-Manual.pdf
+└── LICENSE
+└── README.md
+``` 
+
 ## Building the default S32G3 Image:
 The image can be built with Yocto as follows, and at least one should have `repo` installed:
 - ***Build Environment:*** Ubuntu 20.04
@@ -68,7 +85,12 @@ We include scripts to reproduce the LMBench experiments, the communication perfo
 #### System Performance
 Run:
 ```sh
-
+$./lembench-run
+```
+Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.** 
+After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. For the visualiblity, we provides the script which shows 
+```sh
+$./show_lmbench_results.sh ex.0
 ```
 #### Real-World Workload
 Run:
