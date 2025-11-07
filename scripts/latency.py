@@ -20,7 +20,7 @@ def compute_average(values):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python avg_latency.py <candump_output.txt>")
+        print("Usage: python latency.py <candump_output.txt>")
         sys.exit(1)
 
     filename = sys.argv[1]

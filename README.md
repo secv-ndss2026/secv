@@ -18,6 +18,7 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 ├── scripts
 │   ├── show_lmbench_result.sh
 │   ├── latency.py
+│   ├── candump.sh
 │   └── my_canperf.sh
 └── GoldVIP-S32G3-1.13.0-User-Manual.pdf
 └── LICENSE
@@ -90,19 +91,21 @@ $./lembench-run
 Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.** 
 After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enhance readability, we provide a script that presents the results in a well-organized manner.
 ```sh
-$./show_lmbench_results.sh ex.0
+$cd /usr/share/lmbench/resesults
+$./show_lmbench_results.sh <result_file.0>
 ```
 #### Real-World Workload
 Run:
 ```sh
-$./my_canperf.sh -t can0 -r can1 --payload can_fd_message.log
-$./my_canperf.sh -t can0 -r can1 --payload can_msg_day2.log
-$./my_canperf.sh -t can0 -r can1 --payload can2_g1.log
+$./canperf.sh -t can0 -r can1 --payload can_fd_message.log
+$./canperf.sh -t can0 -r can1 --payload can_msg_day2.log
+$./canperf.sh -t can0 -r can1 --payload can2_g1.log
 
 ```
 This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). Used dataset are already provisioned on our board
 #### Communication Performance
 Run:
 ```sh
+$./candump.sh -t can0 -r can1 -i 0x123 -o 0x123 -g 5 -s 8 -l 5 --log candump.txt
 $python latency.py candump.txt
 ```
