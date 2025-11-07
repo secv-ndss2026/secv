@@ -90,7 +90,8 @@ $./lembench-run
 Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.** 
 After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enhance readability, we provide a script that presents the results in a well-organized manner.
 ```sh
-$./show_lmbench_results.sh ex.0
+$cd /usr/share/lmbench/resesults
+$./show_lmbench_results.sh <result_file.0>
 ```
 #### Real-World Workload
 Run:
@@ -104,5 +105,5 @@ This experiment employs the publicly available CAN message dataset released by [
 #### Communication Performance
 Run:
 ```sh
-$python latency.py candump.txt
+$python latency.py <candump_file.txt>
 ```
