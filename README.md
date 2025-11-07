@@ -88,7 +88,7 @@ Run:
 $./lembench-run
 ```
 Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.** 
-After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. For the visualiblity, we provides the script which shows 
+After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enhance readability, we provide a script that presents the results in a well-organized manner.
 ```sh
 $./show_lmbench_results.sh ex.0
 ```
