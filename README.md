@@ -96,9 +96,9 @@ $./show_lmbench_results.sh <result_file.0>
 #### Real-World Workload
 Run:
 ```sh
-$./my_canperf.sh -t can0 -r can1 --payload can_fd_message.log
-$./my_canperf.sh -t can0 -r can1 --payload can_msg_day2.log
-$./my_canperf.sh -t can0 -r can1 --payload can2_g1.log
+$./canperf.sh -t can0 -r can1 --payload can_fd_message.log
+$./canperf.sh -t can0 -r can1 --payload can_msg_day2.log
+$./canperf.sh -t can0 -r can1 --payload can2_g1.log
 
 ```
 This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). Used dataset are already provisioned on our board
