@@ -18,6 +18,7 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 ├── scripts
 │   ├── show_lmbench_result.sh
 │   ├── latency.py
+│   ├── candump.sh
 │   └── my_canperf.sh
 └── GoldVIP-S32G3-1.13.0-User-Manual.pdf
 └── LICENSE
