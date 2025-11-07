@@ -105,5 +105,6 @@ This experiment employs the publicly available CAN message dataset released by [
 #### Communication Performance
 Run:
 ```sh
-$python latency.py <candump_file.txt>
+$./candump.sh -t can0 -r can1 -i 0x123 -o 0x123 -g 5 -s 8 -l 5 --log candump.txt
+$python latency.py candump.txt
 ```
