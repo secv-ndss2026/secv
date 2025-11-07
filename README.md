@@ -64,8 +64,19 @@ This is the baseline image against which we compare SECV in terms of performance
 In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board), via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
 We include scripts to reproduce the LMBench experiments, the communication performance, the system performance (LMBench), and the IVN gateway resource usage. The scripts are identifiable by their filenames.
 
+## Evaluation 
+#### System Performance
+Run:
+```sh
 
-## IMA Setup:
-#### How to Sign a Test Program
-#### How to Append Permitted Messages
-#### Related Keys
+```
+#### Real-World Workload
+Run:
+```sh
+
+```
+#### Communication Performance
+Run:
+```sh
+
+```
