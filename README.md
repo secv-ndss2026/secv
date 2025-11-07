@@ -19,6 +19,7 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 │   ├── show_lmbench_result.sh
 │   ├── canperf.sh
 │   └── real_can.sh
+├── data
 └── GoldVIP-S32G3-1.13.0-User-Manual.pdf
 └── LICENSE
 └── README.md
