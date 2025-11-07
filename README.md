@@ -17,7 +17,7 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 │       └── secv-kernel-isolation.patch
 ├── scripts
 │   ├── show_lmbench_result.sh
-│   ├── canperf.sh
+│   ├── latency.py
 │   └── real_can.sh
 ├── data
 └── GoldVIP-S32G3-1.13.0-User-Manual.pdf
