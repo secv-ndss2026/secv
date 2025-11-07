@@ -9,6 +9,7 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 
 
 ## Architecture
+We provided three linux side patches 
 ```bash
 ├── patches
 │   └── linux
@@ -18,7 +19,7 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 ├── scripts
 │   ├── show_lmbench_result.sh
 │   ├── latency.py
-│   └── real_can.sh
+│   └── my_canperf.sh
 └── GoldVIP-S32G3-1.13.0-User-Manual.pdf
 └── LICENSE
 └── README.md
@@ -95,9 +96,12 @@ $./show_lmbench_results.sh ex.0
 #### Real-World Workload
 Run:
 ```sh
+$./my_canperf.sh -t can0 -r can1 --payload can_fd_message.log
+$./my_canperf.sh -t can0 -r can1 --payload can_msg_day2.log
+$./my_canperf.sh -t can0 -r can1 --payload can2_g1.log
 
 ```
-This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). 
+This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). Used dataset are already provisioned on our board
 #### Communication Performance
 Run:
 ```sh
