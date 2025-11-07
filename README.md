@@ -19,7 +19,6 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 │   ├── show_lmbench_result.sh
 │   ├── latency.py
 │   └── real_can.sh
-├── data
 └── GoldVIP-S32G3-1.13.0-User-Manual.pdf
 └── LICENSE
 └── README.md
@@ -98,8 +97,9 @@ Run:
 ```sh
 
 ```
+This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). 
 #### Communication Performance
 Run:
 ```sh
-
+./latency.py
 ```
