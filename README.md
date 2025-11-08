@@ -12,19 +12,26 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 ## Architecture
 
 ```bash
+.
+├── GoldVIP-S32G3-1.13.0-User-Manual.pdf
+├── LICENSE
 ├── patches
-│   └── linux
-│       ├── ima-auth.patch
-│       ├── secv-flexcan-drivers.patch
-│       └── secv-kernel-isolation.patch
-├── scripts
-│   ├── show_lmbench_result.sh
-│   ├── latency.py
-│   ├── candump.sh
-│   └── my_canperf.sh
-└── GoldVIP-S32G3-1.13.0-User-Manual.pdf
-└── LICENSE
-└── README.md
+│   ├── arm-trusted-firmware
+│   │   └── secv-secure-monitor.patch
+│   ├── linux
+│   │   ├── secv-flexcan-drivers.patch
+│   │   ├── secv-ima-auth.patch
+│   │   └── secv-kernel-isolation.patch
+│   └── optee-os
+│       └── secv-trusted-os.patch
+├── README.md
+├── s32g3
+│   └── local.conf
+└── scripts
+    ├── candump.sh
+    ├── canperf.sh
+    ├── latency.py
+    └── show_lmbench_result.sh
 ```
 
 ## Building the default S32G3 Image:
@@ -104,7 +111,12 @@ SRC_URI:append = "\
     file://patches/secv-flexcan-drivers.patch \
     file://patches/secv-ima-auth.patch \
 "
+```
 
+After that, one can rebuild the image again to enforce these changes by rerunning the build command:
+
+```sh
+bitbake fsl-image-goldvip
 ```
 
 ## Evaluation
