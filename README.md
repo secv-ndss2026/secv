@@ -26,7 +26,10 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 │       └── secv-trusted-os.patch
 ├── README.md
 ├── s32g3
-│   └── local.conf
+|   ├── linux-s32
+|   ├── optee_os
+|   ├── arm-trusted-firmware
+│   └── local.conf # in case of building with NXP's Yocto
 └── scripts
     ├── candump.sh
     ├── canperf.sh
