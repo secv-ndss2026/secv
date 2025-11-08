@@ -1,0 +1,4 @@
+[submodule "linux"]
+	path = linux
+	url = https://github.com/nxp-auto-linux/linux
+	branch = release/bsp43.0-6.6.52-rt
