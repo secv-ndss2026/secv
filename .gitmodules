@@ -1,4 +1,12 @@
-[submodule "linux"]
-	path = linux
+[submodule "s32g3/arm-trusted-firmware"]
+	path = s32g3/arm-trusted-firmware
+	url = https://github.com/nxp-auto-linux/arm-trusted-firmware.git
+	branch = release/bsp43.0-2.10.7
+[submodule "s32g3/optee_os"]
+	path = s32g3/optee_os
+	url = https://github.com/nxp-auto-linux/optee_os.git
+	branch = release/bsp43.0-4.0
+[submodule "s32g3/linux-s32"]
+	path = s32g3/linux-s32
 	url = https://github.com/nxp-auto-linux/linux
 	branch = release/bsp43.0-6.6.52-rt
