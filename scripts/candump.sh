@@ -1,47 +1,38 @@
-#!/bin/bash
-# SPDX-License-Identifier: BSD-3-Clause
-# candump.sh — minimal capture, mirroring my_canperf.sh behavior (no extras)
+#!/bin/sh
+# candump.sh — ultra-minimal, my_canperf.sh-style capture for latency.py
 # Usage:
-#   ./candump.sh -t can0 -r can1 -g 10 -s 8 --log candump.txt
-#
-set -Ee
+#   ./candump.sh -t can0 -r can1 -g 10 -s 8 --log candump.txt [-l 5] [-i 291] [-o 291] [-D i|r|HEX]
 
-# Defaults (align with typical my_canperf.sh expectations)
-can_tx=notset
-can_rx=notset
-gap_ms=notset
-dlc=notset
-length=5          # default length if -l not given
-tx_id=291         # 0x123
-rx_id=291         # 0x123
-payload=i         # i|r|HEX
+# ---- defaults ----
+can_tx=
+can_rx=
+gap_ms=
+dlc=
+length=5
+tx_id=291   # 0x123
+rx_id=291   # 0x123
+payload=i
 out_file="/tmp/candump.txt"
 
-pid_dump=0
-pid_gen=0
-integer='^[0-9]+$'
+integer='^[0-9][0-9]*$'
 hex='^[0-9A-Fa-f]+$'
-valid_dlc=("1" "2" "3" "4" "5" "6" "7" "8" "12" "16" "20" "24" "32" "48" "64")
+valid_dlc="1 2 3 4 5 6 7 8 12 16 20 24 32 48 64"
 
 usage() {
-  cat <<USAGE
-Usage: ./candump.sh -t canX -r canY -g <ms> -s <DLC> [options]
+  echo "Usage: $0 -t canX -r canY -g <ms> -s <DLC> [options]
   -t|--can-tx   can0|can1
   -r|--can-rx   can0|can1
   -g|--gap      gap ms
   -s|--size     DLC (1..8,12,16,20,24,32,48,64)
   -l|--length   seconds (default 5)
-  -i|--tx-id    decimal ID (0..2047, default 291=0x123)
-  -o|--rx-id    decimal ID (0..2047, default 291=0x123)
+  -i|--tx-id    0..2047 (default 291)
+  -o|--rx-id    0..2047 (default 291)
   -D|--payload  i|r|HEX (default i)
-  --log         candump output path (default /tmp/candump.txt)
-USAGE
+  --log         candump output path (default /tmp/candump.txt)"
 }
 
-trap 'kill $pid_gen 2>/dev/null || true; kill $pid_dump 2>/dev/null || true; exit 1' INT ERR
-
-# Parse args (identical names, no extra options)
-while [[ $# -gt 0 ]]; do
+# ---- parse ----
+while [ $# -gt 0 ]; do
   case "$1" in
     -t|--can-tx) shift; can_tx="$1" ;;
     -r|--can-rx) shift; can_rx="$1" ;;
@@ -55,55 +46,54 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage; exit 0 ;;
     *) echo "Invalid option: $1"; usage; exit 1 ;;
   esac
-  shift || true
+  shift
 done
 
-# Validations (same spirit as my_canperf.sh)
-[[ "$can_tx" == "notset" ]] && { echo "tx interface required"; usage; exit 1; }
-[[ "$can_rx" == "notset" ]] && { echo "rx interface required"; usage; exit 1; }
-[[ "$gap_ms" =~ $integer ]] || { echo "gap must be integer ms"; exit 1; }
-[[ "$length" =~ $integer ]] || { echo "length must be integer sec"; exit 1; }
-if [[ "$dlc" =~ $integer ]]; then
-  ok=0; for v in "${valid_dlc[@]}"; do [[ "$v" == "$dlc" ]] && ok=1; done
-  [[ $ok -eq 1 ]] || { echo "invalid DLC: $dlc"; exit 1; }
-else
-  [[ "$dlc" == "i" ]] || { echo "DLC must be valid size or 'i'"; exit 1; }
-fi
-[[ "$tx_id" =~ $integer && $tx_id -ge 0 && $tx_id -le 2047 ]] || { echo "tx-id 0..2047"; exit 1; }
-[[ "$rx_id" =~ $integer && $rx_id -ge 0 && $rx_id -le 2047 ]] || { echo "rx-id 0..2047"; exit 1; }
-if ! [[ "$payload" == "i" || "$payload" == "r" || "$payload" =~ $hex ]]; then
-  echo "payload must be i|r|HEX"; exit 1
-fi
+# ---- validate ----
+[ -n "$can_tx" ] || { echo "tx interface required"; usage; exit 1; }
+[ -n "$can_rx" ] || { echo "rx interface required"; usage; exit 1; }
 
-# Bring interfaces up via GoldVIP service
+echo "$gap_ms" | grep -Eq "$integer" || { echo "gap must be integer ms"; exit 1; }
+echo "$length" | grep -Eq "$integer" || { echo "length must be integer sec"; exit 1; }
+
+ok=0; for v in $valid_dlc; do [ "$v" = "$dlc" ] && ok=1; done
+[ $ok -eq 1 ] || [ "$dlc" = "i" ] || { echo "invalid DLC: $dlc"; exit 1; }
+
+echo "$tx_id" | grep -Eq "$integer" && [ "$tx_id" -ge 0 ] && [ "$tx_id" -le 2047 ] || { echo "tx-id 0..2047"; exit 1; }
+echo "$rx_id" | grep -Eq "$integer" && [ "$rx_id" -ge 0 ] && [ "$rx_id" -le 2047 ] || { echo "rx-id 0..2047"; exit 1; }
+
+case "$payload" in
+  i|r) ;;
+  *) echo "$payload" | grep -Eq "$hex" || { echo "payload must be i|r|HEX"; exit 1; } ;;
+esac
+
+# ---- bring up (GoldVIP style) ----
 ip a | grep -Eq ": ${can_tx}:.*state UP" || service can restart "${can_tx}"
 ip a | grep -Eq ": ${can_rx}:.*state UP" || service can restart "${can_rx}"
 sleep 1
 
-# Exact-match filter for 11-bit ID
-printf -v RX_HEX "%X" "$rx_id"
+# ---- candump filter (exact SFF) ----
+RX_HEX=$(printf "%X" "$rx_id")
 mask="7FF"
 : > "$out_file"
 
-# Start candump (delta time → latency.py compatible)
+# Start candump in background (delta-time). Keep its PID.
 candump -t d "${can_rx},${RX_HEX}:${mask}" > "$out_file" &
 pid_dump=$!
 
-# Compute number of frames so cangen ends naturally
+# Compute frames so cangen finishes by itself
 frames=$(( length * 1000 / gap_ms ))
-if (( (length * 1000) % gap_ms != 0 )); then frames=$((frames+1)); fi
-(( frames < 1 )) && frames=1
+[ $(( (length * 1000) % gap_ms )) -ne 0 ] && frames=$((frames+1))
+[ $frames -lt 1 ] && frames=1
 
-# TX_HEX (no 0x) for can-utils
-printf -v TX_HEX "%X" "$tx_id"
+TX_HEX=$(printf "%X" "$tx_id")
 
-# Generate traffic (same flags style)
-cangen "$can_tx" -g "$gap_ms" -p 10 -b -I "$TX_HEX" -L "$dlc" -D "$payload" -n "$frames" -v -v >/dev/null 2>&1 &
-pid_gen=$!
+# ---- Run cangen in FOREGROUND (no background, no redirection) ----
+# If cangen errors, you'll see it on the terminal.
+# Flags mirror my_canperf.sh style.
+cangen "$can_tx" -g "$gap_ms" -p 10 -b -I "$TX_HEX" -L "$dlc" -D "$payload" -n "$frames"
 
-# Wait and cleanup
-wait "$pid_gen" 2>/dev/null || true
-sleep 0.2
+# After cangen exits naturally, stop candump and summarize
 kill "$pid_dump" 2>/dev/null || true
 wait "$pid_dump" 2>/dev/null || true
 
