@@ -137,7 +137,7 @@ After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enh
 
 ```sh
 $cd /usr/share/lmbench/results
-$/home/root/show_lmbench_results.sh <result_file.0>
+$/home/root/scripts/show_lmbench_results.sh <result_file.0>
 ```
 
 #### Communication Performance (Microbenchmarks)
@@ -145,8 +145,12 @@ $/home/root/show_lmbench_results.sh <result_file.0>
 Run:
 
 ```sh
-$./scripts/candump.sh -t can0 -r can1 -i 0 -o 4 -g 0 -s 8 -l 10 --log candump.txt
-$python latency.py candump.txt
+$./scripts/canperf.sh -t can0 -r can1 -i 0 -o 4 -g 0 -s 8 -l 10
+```
+This command transmits CAN messages of ID 0 over CAN interface `can0` to the IVN gateway. The gateway acknowledges the messages and responds with CAN messages of ID 4. After it runs, it prints the results, including the throughput and the IVN gateway percentage load (`M7_0 core load`).
+It also saves the timestamp differences of successive received messages in a file, `/tmp/candump.log`, which we use to compute the total latency. To measure the average latency, run the following command:
+```sh
+$python3 scripts/latency.py /tmp/candump.log
 ```
 To reproduce the results in the SECV paper, you may repeat the experiment with (-g 1) to change the transmission gap to 1ms instead of 0ms, and (-s 16/32/64) for message sizes 16, 32, and 16.
 #### Communication Performance (Real-World Workload)
