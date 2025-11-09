@@ -145,7 +145,7 @@ $./show_lmbench_results.sh <result_file.0>
 Run:
 
 ```sh
-$./candump.sh -t can0 -r can1 -i 0 -o 4 -g 0 -s 8 -l 10 --log candump.txt
+$./scripts/candump.sh -t can0 -r can1 -i 0 -o 4 -g 0 -s 8 -l 10 --log candump.txt
 $python latency.py candump.txt
 ```
 To reproduce the results in the SECV paper, you may repeat the experiment with (-g 1) to change the transmission gap to 1ms instead of 0ms, and (-s 16/32/64) for message sizes 16, 32, and 16.
@@ -154,9 +154,9 @@ To reproduce the results in the SECV paper, you may repeat the experiment with (
 Run:
 
 ```sh
-$./canperf.sh -t can0 -r can1 --payload can_fd_message.log
-$./canperf.sh -t can0 -r can1 --payload can_msg_day2.log
-$./canperf.sh -t can0 -r can1 --payload can2_g1.log
+$./scripts/canperf.sh -t can0 -r can1 --payload can_fd_message.log
+$./scripts/canperf.sh -t can0 -r can1 --payload can_msg_day2.log
+$./scripts/canperf.sh -t can0 -r can1 --payload can2_g1.log
 
 ```
 
