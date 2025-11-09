@@ -129,10 +129,10 @@ bitbake fsl-image-goldvip
 Run:
 
 ```sh
-$./lembench-run
+$lmbench-run
 ```
 
-Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.**
+Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.** Where the `vi` screen opens, simply close it by pressing `:q<ENTER>`.
 After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enhance readability, we provide a script that presents the results in a well-organized manner.
 
 ```sh
