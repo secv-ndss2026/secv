@@ -27,8 +27,8 @@ frame_gap_ms=notset
 # Log used for generated CAN frames
 tx_log=/tmp/cangen.log
 
-# Log used for received CAN frames
-rx_log=/tmp/candump -t d.log
+# Log used for received CAN frames (latency.py reads delta-time from this)
+rx_log=/tmp/candump.txt
 
 # Log used for received CAN frames over ETH
 can_to_eth_log=/tmp/can2eth_fast_path.log
@@ -63,7 +63,7 @@ readonly can_dlc_array=("1" "2" "3" "4" "5" "6" "7" "8" "12" "16" "20" "24" "32"
 # The variable that specifies whether the CAN RX interface is used or not
 use_rx_interface="true"
 
-#user log file path
+#user log file path (input replay; optional)
 user_log_file=""
 
 # Set trap handler for Ctrl-C and ERR signal
@@ -84,7 +84,8 @@ OPTIONS:
         -s | --size <bytes>              CAN frame data size in bytes. For CAN frames with variable size, use 'i'
         -l | --length <seconds>          The length of the CAN traffic generation session
         -D | --payload <hexvalue>        The payload of the CAN frame
-        --log <path_to_log_file>         Use an existing log file (overrides cangen)
+        --log <path_to_log_file>         Use an existing input log for replay (overrides cangen)
+        --output <path_to_capture_file>  Path to save candump capture (delta-time format for latency.py)
         -h | --help                      help
 "
 }
@@ -180,6 +181,10 @@ check_input() {
                                 exit 1
                         fi
                         ;;
+                --output)
+                        shift
+                        rx_log="${1}"
+                        ;;
                 -h | --help) usage && exit 0 ;;
                 *)
                         echo "$0: Invalid option $1"
@@ -256,8 +261,6 @@ check_input() {
                 time_gen=$(echo "($time_gen+0.999)/1" | bc)  
 
                 user_log_mode="true"
-
-                
         fi
 
         if [[ "$tx_id" != "notset" ]]; then
@@ -341,7 +344,7 @@ run_perf() {
         # Run candump on can_rx_interface interface expecting CAN id rx_id. Swap byte
         # order argument (-S) is used to facilitate incremental payload checking
         if [[ "${use_rx_interface}" == "true" ]]; then
-                candump -t d -S "${can_rx_interface}","${rx_id}":"${id_filter}" >${rx_log} &
+                candump -t d -S "${can_rx_interface}","${rx_id}":"${id_filter}" >"${rx_log}" &
                 pid_candump=$!
         fi
 
@@ -364,7 +367,7 @@ run_perf() {
                 pid_cangen=$!
         else
         timeout "${time_gen}" cangen "${can_tx_interface}" -g "${frame_gap_ms}" -p 10 -b -I "${tx_id}" \
-                -L "${can_frame_data_size}" -D "${payload_data}" "${gen_frames_opt}" -v -v >${tx_log} &
+                -L "${can_frame_data_size}" -D "${payload_data}" "${gen_frames_opt}" -v -v >"${tx_log}" &
         pid_cangen=$!
         fi
         
@@ -451,8 +454,6 @@ display_report() {
                 echo "M7_1 core load:           ${M7_1_LOAD}%"\
                 echo "#############################################################"
         fi
-
-
 }
 
 set_trap
