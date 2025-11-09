@@ -137,7 +137,7 @@ After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enh
 
 ```sh
 $cd /usr/share/lmbench/results
-$./show_lmbench_results.sh <result_file.0>
+$/home/root/show_lmbench_results.sh <result_file.0>
 ```
 
 #### Communication Performance (Microbenchmarks)
