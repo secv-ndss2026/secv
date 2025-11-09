@@ -136,11 +136,20 @@ Then a prompt will appear asking for configuration input. For our experiment, us
 After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enhance readability, we provide a script that presents the results in a well-organized manner.
 
 ```sh
-$cd /usr/share/lmbench/resesults
+$cd /usr/share/lmbench/results
 $./show_lmbench_results.sh <result_file.0>
 ```
 
-#### Real-World Workload
+#### Communication Performance (Microbenchmarks)
+
+Run:
+
+```sh
+$./candump.sh -t can0 -r can1 -i 0 -o 4 -g 5 -s 8 -l 5 --log candump.txt
+$python latency.py candump.txt
+```
+
+#### Communication Performance (Real-World Workload)
 
 Run:
 
@@ -153,11 +162,4 @@ $./canperf.sh -t can0 -r can1 --payload can2_g1.log
 
 This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). Used dataset are already provisioned on our board
 
-#### Communication Performance
 
-Run:
-
-```sh
-$./candump.sh -t can0 -r can1 -i 0x123 -o 0x123 -g 5 -s 8 -l 5 --log candump.txt
-$python latency.py candump.txt
-```
