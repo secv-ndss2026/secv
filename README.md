@@ -147,23 +147,26 @@ Run:
 ```sh
 $./scripts/canperf.sh -t can0 -r can1 -i 0 -o 4 -g 0 -s 8 -l 10
 ```
+
 This command transmits CAN messages of ID 0 over CAN interface `can0` to the IVN gateway. The gateway acknowledges the messages and responds with CAN messages of ID 4. After it runs, it prints the results, including the throughput and the IVN gateway percentage load (`M7_0 core load`).
 It also saves the timestamp differences of successive received messages in a file, `/tmp/candump.log`, which we use to compute the total latency. To measure the average latency, run the following command:
+
 ```sh
 $python3 scripts/latency.py /tmp/candump.log
 ```
+
 To reproduce the results in the SECV paper, you may repeat the experiment with (-g 1) to change the transmission gap to 1ms instead of 0ms, and (-s 16/32/64) for message sizes 16, 32, and 16.
+
 #### Communication Performance (Real-World Workload)
 
+For real-world workloads, we check only whether all CAN messages are transmitted without missing deadlines. For this, we replay the CAN messages recorded from real-world vehicles. The dataset is large (hundreds of MBs), so we take the first 10000 messages to simplify the experiment.
 Run:
 
 ```sh
-$./scripts/canperf.sh -t can0 -r can1 --payload can_fd_message.log
-$./scripts/canperf.sh -t can0 -r can1 --payload can_msg_day2.log
-$./scripts/canperf.sh -t can0 -r can1 --payload can2_g1.log
-
+$./scripts/rw_canperf.sh -t can0 -r can1 -o 0x4 ./datasets/<any_log_file.log>
 ```
 
+Since we transmit 10000 for each log file, you should confirm that 10000 messages are transmitted (by checking the printed Tx frames) after the experiment runs. As the messages don't conform to our IVN GW expected messages, we don't receive responses for this particular experiment. Nonetheless, we manage to confirm that SECV meets all the deadlines of realworld transmissions.
+Recall that if the controller is busy due to transmission, messages on the queue are stalled, and this would cause delay in transmission, hence some frames would fail to meet the deadlines.
+
 This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). Used dataset are already provisioned on our board
-
-
