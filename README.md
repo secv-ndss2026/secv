@@ -2,7 +2,7 @@
 
 This is the open-source for the SECV: Securing Connected Vehicles with Hardware Trust Anchors, NDSS 2026 Fall paper.
 Here, we will provide code modifications for the core parts of the paper and the instructions on building SECV for S32G3.
-We provide code patches showing the major changes made to help reduce the time of search time. The major components here are the **Linux Kernel (NW OS)**, **OPTEE-OS (Trusted OS)**, **drivers (NW & SW components)**, and **Arm Trusted Firmware (The Security Monitor)**. This open-source is based on **Linux Kernel 6.6.52**, **OPTEE-OS V4.0**, and **Arm Trusted Firmware 2.10.7**, we believe the provided patches apply universally regardless of the board, except where mentioned specifically.
+We provide code patches showing the major changes made to help reduce the time of search time. The major components here are the **Linux Kernel (NW OS)**, **OPTEE-OS (Trusted OS)**, **drivers (NW & SW components)**, and **Arm Trusted Firmware (The Security Monitor)**. This open-source is based on **Linux Kernel 6.6.52**, **OPTEE-OS V4.0**, and **Arm Trusted Firmware 2.10.7**. This implementation has been tested on NXP S32G3, but we are making an effort to provide a porting for **Raspberry Pi 4** with an SPI driver. Except for secure peripheral handling in ATF and OPTEE where implementations are specific to S32G3, we believe the provided patches apply universally regardless of the board, except where mentioned specifically.
 
 ## Caution and Disclaimer:
 
