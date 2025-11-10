@@ -63,9 +63,6 @@ readonly can_dlc_array=("1" "2" "3" "4" "5" "6" "7" "8" "12" "16" "20" "24" "32"
 # The variable that specifies whether the CAN RX interface is used or not
 use_rx_interface="true"
 
-#user log file path
-user_log_file=""
-
 # Set trap handler for Ctrl-C and ERR signal
 set_trap() {
         trap 'stop_cangen ; exit 1' INT
@@ -84,7 +81,6 @@ OPTIONS:
         -s | --size <bytes>              CAN frame data size in bytes. For CAN frames with variable size, use 'i'
         -l | --length <seconds>          The length of the CAN traffic generation session
         -D | --payload <hexvalue>        The payload of the CAN frame
-        --log <path_to_log_file>         Use an existing log file (overrides cangen)
         -h | --help                      help
 "
 }
@@ -172,14 +168,6 @@ check_input() {
                                 exit 1
                         fi
                         ;;
-                --log)
-                        shift
-                        user_log_file=${1}
-                        if [[ ! -f "${user_log_file}" ]]; then
-                                echo "Given log file does not exist: ${user_log_file}"
-                                exit 1
-                        fi
-                        ;;
                 -h | --help) usage && exit 0 ;;
                 *)
                         echo "$0: Invalid option $1"
@@ -242,16 +230,6 @@ check_input() {
                 usage
                 exit 1
         fi
-
-        if [[ -n "$user_log_file"]]; then
-                echo "Using provided log file: $user_log_file"
-                if [["{$can_tx_interface}" == "notset"]]; then  
-                        echo "CAN tx interface must be set with -t or --can-tx"
-                        exit 1
-                fi
-                time_gen=$(awk -F'[)(]' '{print $2}' "$user_log_file" | awk -F '.' '{print $1}' | tail -1)
-                time_gen=$((time_gen + 1))
-                user_log_mode="true"
 
         tx_id=$(printf 0x%x "${tx_id}")
         if [[ "${use_rx_interface}" == "true" ]]; then
