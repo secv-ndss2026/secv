@@ -13,27 +13,28 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 
 ```bash
 .
+├── datasets
+│   ├── can2_g10.log
+│   ├── can2_g1.log
+│   ├── fd_g10.log
+│   ├── fd_g1.log
+│   └── replace_ids.py
 ├── GoldVIP-S32G3-1.13.0-User-Manual.pdf
 ├── LICENSE
 ├── patches
 │   ├── arm-trusted-firmware
-│   │   └── secv-secure-monitor.patch
 │   ├── linux
-│   │   ├── secv-flexcan-drivers.patch
-│   │   ├── secv-ima-auth.patch
-│   │   └── secv-kernel-isolation.patch
 │   └── optee-os
-│       └── secv-trusted-os.patch
 ├── README.md
 ├── s32g3
-|   ├── linux-s32
-|   ├── optee_os
-|   ├── arm-trusted-firmware
-│   └── local.conf # in case of building with NXP's Yocto
+│   ├── arm-trusted-firmware
+│   ├── linux-s32
+│   ├── local.conf
+│   └── optee_os
 └── scripts
-    ├── candump.sh
     ├── canperf.sh
     ├── latency.py
+    ├── rw_canperf.sh
     └── show_lmbench_result.sh
 ```
 
