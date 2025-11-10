@@ -116,7 +116,7 @@ SRC_URI:append = "\
 "
 ```
 
-After that, one can rebuild the image again to enforce these changes by rerunning the build command:
+Do the same for arm-trusted-firmware and optee_os, and after that, one can rebuild the image again to enforce these changes by rerunning the build command:
 
 ```sh
 bitbake fsl-image-goldvip
