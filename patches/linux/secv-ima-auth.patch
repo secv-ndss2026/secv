@@ -1,389 +1,299 @@
-diff --git a/drivers/tee/optee/Makefile b/drivers/tee/optee/Makefile
-index a6eff388d300..586539b8141b 100644
---- a/drivers/tee/optee/Makefile
-+++ b/drivers/tee/optee/Makefile
-@@ -8,6 +8,7 @@ optee-objs += supp.o
- optee-objs += device.o
- optee-objs += smc_abi.o
- optee-objs += ffa_abi.o
-+optee-objs += tee_send_exec_info.o
- 
- # for tracing framework to find optee_trace.h
- CFLAGS_smc_abi.o := -I$(src)
-diff --git a/drivers/tee/optee/tee_send_exec_info.c b/drivers/tee/optee/tee_send_exec_info.c
+diff --git a/include/linux/optee_secv_smc.h b/include/linux/optee_secv_smc.h
 new file mode 100644
-index 000000000000..78cb9fd9f1d7
+index 0000000000000..64c2112dcf5be
 --- /dev/null
-+++ b/drivers/tee/optee/tee_send_exec_info.c
-@@ -0,0 +1,102 @@
-+#include <linux/tee_drv.h>
-+#include <linux/slab.h>
-+#include <linux/string.h>
-+#include <linux/uuid.h>
-+#include <linux/err.h>
-+#include <linux/types.h>
-+#include "../tee_private.h"
-+#include <linux/ktime.h>
++++ b/include/linux/optee_secv_smc.h
+@@ -0,0 +1,17 @@
++/* include/linux/optee_secv_smc.h */
++#include <linux/arm-smccc.h>  
 +
-+#define PTA_CAN_ID_UUID \
-+    UUID_INIT(0x12345678, 0x1111, 0x1234, \
-+                0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0)
++#ifndef OPTEE_SMC_FAST_CALL_VAL
++#define OPTEE_SMC_FAST_CALL_VAL(func) \
++    ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, \
++                       ARM_SMCCC_SMC_32, \
++                       ARM_SMCCC_OWNER_TRUSTED_OS, \
++                       (func))
++#endif
 +
-+static uuid_t can_id_uuid __maybe_unused = PTA_CAN_ID_UUID;
++#define OPTEE_SMC_FUNCID_MID_TABLE   0x00FEU
++#define OPTEE_SMC_CALL_MID_TABLE \
++    OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_MID_TABLE)
 +
-+#define PTA_CMD_REGISTER_EXEC_INFO  0
-+#define TEEC_SUCCESS    0x00000000
-+
-+static int match_any(struct tee_ioctl_version_data *vers, const void *data)
-+{
-+    return true;
-+}
-+
-+int tee_send_exec_info(uint32_t pid, u8 *file_hash, u32 *can_ids, u32 num_ids)
-+{
-+    struct tee_context *ctx;
-+    struct tee_shm *shm = NULL;
-+    struct tee_ioctl_open_session_arg sess_arg = {0};
-+    struct tee_ioctl_invoke_arg inv_arg = {0};
-+    struct tee_param param[1] = {0};
-+    size_t shm_size;
-+    u8 *shm_buf;
-+    int rc;
-+
-+    /*1. Open TEE Context with TEE driver */
-+    ctx = tee_client_open_context(NULL, match_any, NULL, NULL);
-+    if(IS_ERR(ctx)) {
-+        return PTR_ERR(ctx);
-+    }
-+
-+    if(!ctx->teedev || !ctx->teedev->desc || !ctx->teedev->desc->ops) {
-+        rc = -ENODEV;
-+        goto out_ctx;
-+    }
-+
-+    /* 2. Open session with PTA */
-+    export_uuid(sess_arg.uuid, &can_id_uuid);
-+    sess_arg.clnt_login = TEE_IOCTL_LOGIN_PUBLIC;
-+    sess_arg.num_params = 0;
-+
-+    rc = tee_client_open_session(ctx, &sess_arg, NULL);
-+    if(rc < 0 || sess_arg.ret != TEEC_SUCCESS) {
-+        rc = rc < 0? rc : -EINVAL;
-+        goto out_ctx;
-+    }
-+
-+    /*3. Allocate shared memory */
-+    shm_size = sizeof(uint32_t) + 32 + sizeof(u32) + num_ids * sizeof(u32);
-+    shm = tee_shm_alloc_kernel_buf(ctx, shm_size);
-+    if(IS_ERR(shm)) {
-+        rc = PTR_ERR(shm);
-+        goto out_sess;
-+    }
-+
-+    shm_buf = tee_shm_get_va(shm, 0);
-+    if(IS_ERR(shm_buf)) {
-+        rc = PTR_ERR(shm_buf);
-+        goto out_shm;
-+    }
-+
-+    /*4. Copy data into shared memory */
-+    u8 *p = shm_buf;
-+    memcpy(p, &pid, sizeof(uint32_t));
-+    p += sizeof(uint32_t);
-+    memcpy(p, file_hash, 32);
-+    p += 32;
-+    memcpy(p, can_ids, num_ids * sizeof(u32));
-+
-+    /* 5. Setup TEE parameters */
-+    inv_arg.func = PTA_CMD_REGISTER_EXEC_INFO;
-+    inv_arg.session = sess_arg.session;
-+    inv_arg.num_params = 1;
-+
-+    param[0].attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT;
-+    param[0].u.memref.shm = shm;
-+    param[0].u.memref.shm_offs = 0;
-+    param[0].u.memref.size = shm_size;
-+
-+    /* 6. Invoke PTA function */
-+    rc = tee_client_invoke_func(ctx, &inv_arg, param);
-+    if(rc < 0 || inv_arg.ret != TEEC_SUCCESS) {
-+        rc = rc < 0? rc : -EINVAL;
-+    } 
-+
-+out_shm:
-+    tee_shm_free(shm);
-+out_sess:
-+    tee_client_close_session(ctx, sess_arg.session);
-+out_ctx:
-+    tee_client_close_context(ctx);
-+    return rc;
-+}
++#define OPTEE_SMC_RETURN_OK                  0x0
++#define OPTEE_SMC_RETURN_UNKNOWN_FUNCTION    0xffffffffU
 \ No newline at end of file
-diff --git a/security/integrity/iint.c b/security/integrity/iint.c
-index 27ea19fb1f54..f38c95a46e75 100644
---- a/security/integrity/iint.c
-+++ b/security/integrity/iint.c
-@@ -21,6 +21,112 @@
- #include <linux/lsm_hooks.h>
- #include "integrity.h"
- 
-+
-+/* SECV Modification */
-+#include <linux/binfmts.h>
-+#include <linux/types.h>
-+#include <linux/fs.h>
-+#include <crypto/hash.h>
-+#include <linux/mm.h>
-+
-+extern int extract_canid_and_hash_from_file(struct file *file, u8 *can_ids_out, u8 *hash_out, u32 *can_id_len_out);
-+extern void tee_send_exec_info(uint32_t pid, u8 *hash, u32 *can_ids, u32 num_ids);
-+
-+int extract_canid_and_hash_from_file(struct file *file, u8 *can_ids_out, u8 *hash_out, u32 *can_id_len_out)
-+{
-+	long fsize = i_size_read(file_inode(file));
-+	if(fsize < sizeof(u32))
-+		return -EINVAL;
-+	
-+	loff_t offset = fsize - sizeof(u32);
-+	u32 can_id_size;
-+	ssize_t r = kernel_read(file, &can_id_size, sizeof(u32), &offset);
-+	if(r != sizeof(u32))
-+		return -EIO;
-+	
-+	can_id_size = __le32_to_cpu(can_id_size);
-+	if(can_id_size == 0 || can_id_size > 256)
-+		return -EINVAL;
-+
-+	offset = fsize - sizeof(u32) - can_id_size;
-+	r = kernel_read(file, can_ids_out, can_id_size, &offset);
-+	if(r != can_id_size)
-+		return -EIO;
-+
-+	*can_id_len_out = can_id_size;
-+
-+	/* compute the hash */
-+	u8 *buf = kmalloc(fsize, GFP_KERNEL);
-+	if(!buf) 
-+		return -ENOMEM;
-+	
-+	offset = 0;
-+	r = kernel_read(file, buf, fsize, &offset);
-+	if(r != fsize) {
-+		kfree(buf);
-+		return -EIO;
-+	}
-+
-+	struct crypto_shash *tfm = crypto_alloc_shash("sha256",0,0);
-+	if(IS_ERR(tfm)) {
-+		kfree(buf); 
-+		return PTR_ERR(tfm);
-+	}
-+
-+	struct shash_desc *desc = kmalloc(sizeof(*desc) + crypto_shash_descsize(tfm), GFP_KERNEL);
-+	if(!desc) {
-+		crypto_free_shash(tfm);
-+		kfree(buf);
-+		return -ENOMEM;
-+	}
-+
-+	desc->tfm = tfm;
-+
-+	crypto_shash_init(desc);
-+	crypto_shash_update(desc, buf, fsize);
-+	crypto_shash_final(desc, hash_out);
-+
-+	kfree(desc);
-+	crypto_free_shash(tfm);
-+	kfree(buf);
-+
-+	return 0;
-+}
-+
-+
-+static int my_task_alloc(struct task_struct *task, unsigned long clone_flags) 
-+{
-+	struct file *exec_file;
-+	u8 can_ids[256];
-+	u8 hash[32];
-+	u32 can_id_len = 0;
-+	int ret;
-+
-+	if(!current || !current->mm)
-+		return 0;
-+
-+	exec_file = get_mm_exe_file(current->mm);
-+	if(!exec_file)
-+		return 0;
-+
-+	ret = extract_canid_and_hash_from_file(exec_file, can_ids, hash, &can_id_len);
-+	fput(exec_file);
-+
-+	if (ret != 0 || can_id_len == 0) 
-+		return 0;
-+
-+	u32 num_ids = can_id_len / sizeof(u32);
-+
-+	tee_send_exec_info(task->pid, hash, (u32 *)can_ids, num_ids);
-+
-+	return 0;
-+}
-+
-+static struct security_hook_list secv_integrity_hooks[] __ro_after_init = {
-+	LSM_HOOK_INIT(task_alloc, my_task_alloc),
-+};
-+/*End of SECV Modification*/
-+
- static struct rb_root integrity_iint_tree = RB_ROOT;
- static DEFINE_RWLOCK(integrity_iint_lock);
- static struct kmem_cache *iint_cache __read_mostly;
-@@ -198,6 +304,7 @@ static int __init integrity_iintcache_init(void)
- 	iint_cache =
- 	    kmem_cache_create("iint_cache", sizeof(struct integrity_iint_cache),
- 			      0, SLAB_PANIC, iint_init_once);
-+	security_add_hooks(secv_integrity_hooks, sizeof(secv_integrity_hooks), "integrity");
- 	return 0;
- }
- DEFINE_LSM(integrity) = {
 diff --git a/security/integrity/ima/ima_main.c b/security/integrity/ima/ima_main.c
-index cc1217ac2c6f..6f65f9c0b23c 100644
+index 5f2a06fb36c1a..a4253d0b5e421 100644
 --- a/security/integrity/ima/ima_main.c
 +++ b/security/integrity/ima/ima_main.c
-@@ -27,6 +27,13 @@
- #include <linux/fs.h>
- #include <linux/iversion.h>
- 
-+#include <linux/types.h>
-+#include <linux/ktime.h>
-+#include <linux/sched.h>
-+#include <linux/sched/task.h>
-+
-+extern int tee_send_exec_info(uint32_t pid, u8 *file_hash, u32 *can_ids, u32 num_ids);
-+
+@@ -29,13 +29,17 @@
+ #include <linux/evm.h>
  #include "ima.h"
  
+-/*MODIFICATION*/
++#include <linux/mm.h> 
+ #include <linux/types.h>   
+ #include <linux/ktime.h>
+ #include <linux/sched.h>
+ #include <linux/sched/task.h>   
+-#include <linux/ktime.h>
+-extern int tee_send_exec_info(uint32_t pid, u8 *file_hash, u32 *can_ids, u32 num_ids);
++#include <linux/init.h>
++#include <linux/arm-smccc.h>
++#include <asm/cacheflush.h>
++#include <linux/optee_secv_smc.h> 
++
++#define SECV_MID_MAX   1024
+ 
  #ifdef CONFIG_IMA_APPRAISE
-@@ -376,9 +383,123 @@ static int process_measurement(struct file *file, const struct cred *cred,
- 						      xattr_len, modsig);
- 			inode_unlock(inode);
- 		}
--		if (!rc)
-+		if (!rc){
+ int ima_appraise = IMA_APPRAISE_ENFORCE;
+@@ -402,153 +406,117 @@ static int process_measurement(struct file *file, const struct cred *cred,
  			rc = mmap_violation_check(func, file, &pathbuf,
- 						  &pathname, filename);
-+
-+			/*SeCV MODIFICATION: can id extraction + TEE session open */
-+			if(func == BPRM_CHECK) {
-+				/* 1. Check for appended CAN ID list size */
-+				long fsize = i_size_read(inode);
-+				if(fsize < sizeof(uint32_t)) {
+ 						  &pathname, filename);}
+ 			
+-			/*MODIFICATION : can id extraction + TEE session open*/	
+ 			if (func == BPRM_CHECK) {
+-				ktime_t start, end;
+-				s64 delta;
+-			
+-				start = ktime_get_ns();
+-
+-    			
+-    			// Step 1: Check for appended CAN ID list size 
+-				
++				if (system_state != SYSTEM_RUNNING || current->pid == 1) {
 +					goto skip_tee;
 +				}
-+
-+				file->f_pos = 0;
-+				uint32_t can_id_size = 0;
-+				long offset = fsize - sizeof(uint32_t);
-+				ssize_t r = kernel_read(file, &can_id_size, sizeof(uint32_t), &offset);
-+				can_id_size = __le32_to_cpu(can_id_size);
-+
-+				if(r != sizeof(uint32_t)) {
-+					goto skip_tee;
+ 
++    			/* Check for appended MID list size */
+ 				loff_t fsize = i_size_read(inode);
+-    			if (fsize < sizeof(uint32_t)) {
+-        		pr_err("[IMA debug] File too small to contain CAN ID list\n");
+-        		goto skip_tee;
++    			if (fsize < sizeof(__le32)) {
++        			goto skip_tee;
+     			}
+-
+-				
+-    			pr_info("[IMA debug] 2. Starting CAN ID list extraction\n");
+     			
+ 				file->f_pos = 0;
+-    			uint32_t can_id_size = 0;
++    			uint32_t mid_size = 0;
+     			loff_t offset = fsize - sizeof(uint32_t);
+-				pr_info("[IMA debug] Reading CAN ID size from offset: %lld, file size: %lld\n", offset, fsize);
+-				ssize_t r = kernel_read(file, &can_id_size, sizeof(uint32_t), &offset);
+-				can_id_size = le32_to_cpu(can_id_size);
++				ssize_t r = kernel_read(file, &mid_size, sizeof(uint32_t), &offset);
++				mid_size = le32_to_cpu(mid_size);
+ 
+     			if (r != sizeof(uint32_t)) {
+-        			pr_err("[IMA debug] Failed to read CAN ID size\n");
++        			pr_err("[IMA debug] Failed to read MID size\n");
+         			goto skip_tee;
+     			}
+ 
+-    			char *can_id_data = kmalloc(can_id_size, GFP_KERNEL);
+-    			if (!can_id_data) {
+-        			pr_err("[IMA debug] Failed to alloc can_id_data\n");
++				if (mid_size == 0 || mid_size > SECV_MID_MAX || (12 + mid_size) > fsize){
++					pr_err("[IMA debug] No MID detected\n");
++    				goto skip_tee;
 +				}
 +
-+				char *can_id_data = kmalloc(can_id_size, GFP_KERNEL);
-+				if(!can_id_data) {
-+					goto skip_tee;
-+				}
++    			char *mid_data = kmalloc(mid_size, GFP_KERNEL);
++    			if (!mid_data) {
++        			pr_err("[IMA debug] Failed to alloc mid_data\n");
+         			goto skip_tee;
+     			}
+ 
+-    			offset = fsize - sizeof(uint32_t) - can_id_size;
+-				r = kernel_read(file, can_id_data, can_id_size, &offset);
+-    			if (r != can_id_size) {
+-        			pr_err("[IMA debug] Failed to read CAN ID data\n");
+-        			kfree(can_id_data);
++    			offset = fsize - sizeof(uint32_t) - mid_size;
++				r = kernel_read(file, mid_data, mid_size, &offset);
++    			if (r != mid_size) {
++        			pr_err("[IMA debug] Failed to read MID data\n");
++        			kfree(mid_data);
+         			goto skip_tee;
+     			}
+ 
+-				if(can_id_size == 0){
+-					pr_info("[IMA debug] No CAN ID detected\n");
+-					kfree(can_id_data);
++				if(mid_size == 0){
++					pr_info("[IMA debug] No MID detected\n");
++					kfree(mid_data);
+         			goto skip_tee;
+ 				}
+-			
+-    			pr_info("[IMA debug] 3. CAN ID list extraction completed (%u bytes)\n", can_id_size);
+-
+-    			// Step 2: Prepare hash of the full merged file 
+-				offset = 0;
+-				ssize_t read_len;
+-				uint8_t *file_buf = kmalloc(fsize, GFP_KERNEL);
+-				if (!file_buf) {
+-    				pr_err("[IMA debug] Failed to alloc file_buf for hash\n");
+-    				kfree(can_id_data);
+-    				goto skip_tee;
+-				}
+ 
+-				read_len = kernel_read(file, file_buf, fsize, &offset);
+-				if (read_len != fsize) {
+-    				pr_err("[IMA debug] Failed to read full merged file (read=%zd)\n", read_len);
+-    				kfree(file_buf);
+-    				kfree(can_id_data);
++				if (!iint->ima_hash || !(iint->flags & IMA_COLLECTED)) {
++    				pr_info("[IMA] hash not collected yet; skip TEE\n");
++    				kfree(mid_data);
+     				goto skip_tee;
+ 				}
+ 
+-				u8 merged_hash[SHA256_DIGEST_SIZE];
+-				struct crypto_shash *tfm = crypto_alloc_shash("sha256", 0, 0);
+-				if (IS_ERR(tfm)) {
+-    				pr_err("[IMA debug] Failed to alloc sha256 tfm\n");
+-    				kfree(file_buf);
+-    				kfree(can_id_data);
+-    				goto skip_tee;
+-				}
++				int algo = iint->ima_hash->algo;
++    			size_t dlen = hash_digest_size[algo];
++    			u8 digest[IMA_MAX_DIGEST_SIZE];
+ 
+-				struct shash_desc *desc = kmalloc(sizeof(*desc) + crypto_shash_descsize(tfm), GFP_KERNEL);
+-				if (!desc) {
+-					pr_err("[IMA debug] Failed to alloc shash_desc\n");
+-					crypto_free_shash(tfm);
+-					kfree(file_buf);
+-					kfree(can_id_data);
+-					goto skip_tee;
+-				}
++    			if (dlen != 32) {
++        			pr_info("[IMA] Digest size=%zu for algo=%d (expected 32)\n", dlen, algo);
++        			kfree(mid_data);
++        			goto skip_tee;
++    			}
+ 
+-				desc->tfm = tfm;
+-
+-				if (crypto_shash_init(desc) ||
+-				crypto_shash_update(desc, file_buf, fsize) ||
+-				crypto_shash_final(desc, merged_hash)) {
+-				pr_err("[IMA debug] SHA256 computation failed\n");
+-				kfree(desc);
+-				crypto_free_shash(tfm);
+-				kfree(file_buf);
+-				kfree(can_id_data);
+-				goto skip_tee;
+-				}			
+-
+-				kfree(desc);
+-				crypto_free_shash(tfm);
+-				kfree(file_buf);
+-
+-				/*
+-				// Step 3: Prepare Secure World message 
+-    			struct exec_info_msg {
++    			memcpy(digest, iint->ima_hash->digest, dlen);
 +
-+				offset = fsize - sizeof(uint32_t) - can_id_size;
-+				r = kernel_read(file, can_id_data, can_id_size, &offset);
-+				if(r != can_id_size) {
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
++   			 	pr_info("[IMA] prepare sw msg struct\n");
 +
-+				if(can_id_size == 0) {
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
++				/* Prepare Secure World message */
++    			struct __packed exec_info_msg {
+         			uint32_t pid;
+-        			u8 file_hash[32];
+-        			u32 can_id_len;
+-        			uint32_t can_ids[];
++        			uint8_t file_hash[32];   /* hash digest of the file */
++        			uint32_t num_ids;        /* MID size (e.g., can message id, port id, etc/) */
++        			uint32_t mids[];    /* actual encrypted MIDs */
+     			};
+ 				
+-    			size_t msg_len = sizeof(struct exec_info_msg) + can_id_size;
+-    			struct exec_info_msg *msg = kmalloc(msg_len, GFP_KERNEL);
+-    			if (!msg) {
+-        			pr_err("[IMA debug] Failed to alloc exec_info_msg\n");
+-        			kfree(can_id_data);
+-        			goto skip_tee;
+-    			}
+-					
+-				msg->pid = current->pid;
+-				msg->can_id_len = can_id_size;
+-    			memcpy(msg->file_hash, merged_hash, 32);
+-    			memcpy(msg->can_ids, can_id_data, can_id_size);
+-
+-    			pr_info("[IMA debug] 5. TEE session opened and exec_info_msg prepared for pid=%d\n", msg->pid);
+-
+-    			// Step 4: Send to TEE 
+-    			tee_send_exec_info(msg->pid, msg->file_hash, (u32 *)msg->can_ids, msg->can_id_len / sizeof(u32));
+-
+-    			kfree(msg);
+-    			kfree(can_id_data);
+-			*/
+-				end = ktime_get_ns();
+-    			delta = end - start;
+-				pr_info(">>> [measure] IMA executionoverhead: %lld ns\n", delta);
+-
+-			skip_tee:
+-    			;
+-				} 
++				uint32_t num_ids = mid_size / sizeof(uint32_t);
++				size_t total = sizeof(struct exec_info_msg) + num_ids * sizeof(uint32_t);
 +
-+				/* 2. Prepare hash of the fully merged file */
-+				offset = 0;
-+				ssize_t read_len;
-+				uint8_t *file_buf = kmalloc(fsize, GFP_KERNEL);
-+				if(!file_buf) {
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
++				struct exec_info_msg *buf = kmalloc(total, GFP_KERNEL);
++				if (!buf) goto skip_tee;
 +
-+				read_len = kernel_read(file, file_buf, fsize, &offset);
-+				if(read_len != fsize) {
-+					kfree(file_buf);
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
++				buf->pid = current->pid;
++				memcpy(buf->file_hash, digest, 32);
++				buf->num_ids = num_ids;
++				memcpy(buf->mids, mid_data, num_ids * sizeof(uint32_t));
 +
-+				u8 merged_hash[SHA256_DIGEST_SIZE];
-+				struct crypto_shash *tfm = crypto_alloc_shash("sha256",0,0);
-+				if(IS_ERR(tfm)) {
-+					kfree(file_buf);
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
++				dcache_clean_poc((unsigned long)buf, (unsigned long)buf + total);
 +
-+				struct shash_desc *desc = kmalloc(sizeof(*desc) + crypto_shash_descsize(tfm), GFP_KERNEL);
-+				if(!desc) {
-+					crypto_free_shash(tfm);
-+					kfree(file_buf);
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
++				phys_addr_t pa = virt_to_phys(buf);
++				uint32_t pa_lo = (uint32_t)(pa & 0xffffffffu);
++				uint32_t pa_hi = (uint32_t)(pa >> 32);
 +
-+				desc->tfm = tfm;
++				struct arm_smccc_res res;
 +
-+				if(crypto_shash_init(desc) ||
-+					crypto_shash_update(desc, file_buf, fsize) || 
-+						crypto_shash_final(desc, merged_hash)) {
-+					kfree(desc);
-+					crypto_free_shash(tfm);
-+					kfree(file_buf);
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
++    			arm_smccc_smc((unsigned long)OPTEE_SMC_CALL_MID_TABLE, /* a0: SMC32 fid */
++				(unsigned long)pa_lo,                    /* a1: PA low */
++				(unsigned long)pa_hi,                    /* a2: PA high */
++				(unsigned long)((uint32_t)total),             /* a3: len */
++				0,0,0,0, &res);
 +
-+				kfree(desc);
-+				crypto_free_shash(tfm);
-+				kfree(file_buf);
++    			if (res.a0 != OPTEE_SMC_RETURN_OK)
++					pr_err("[IMA fastcall] OP-TEE ret=0x%llx\n", res.a0);
 +
-+				/* 3. Prepare Secure World message */
-+				struct exec_info_msg {
-+					uint32_t pid;
-+					u8 file_hash[32];
-+					u32 can_id_len;
-+					uint32_t can_ids[];
-+				};
++    			memzero_explicit(buf, total);
++				kfree(buf);
 +
-+				size_t msg_len = sizeof(struct exec_info_msg) + can_id_size;
-+				struct exec_info_msg *msg = kmalloc(msg_len, GFP_KERNEL);
-+				if(!msg) {
-+					kfree(can_id_data);
-+					goto skip_tee;
-+				}
-+
-+				msg->pid = current->pid;
-+				msg->can_id_len = can_id_size;
-+				memcpy(msg->file_hash, merged_hash, 32);
-+				memcpy(msg->can_ids, can_id_data, can_id_size);
-+
-+				/* 4. Send to TEE */
-+				tee_send_exec_info(msg->pid, msg->file_hash, (u32 *)msg->can_ids, msg->can_id_len / sizeof(u32));
-+
-+				kfree(msg);
-+				kfree(can_id_data);
 +				skip_tee:
-+					;
-+				/* end of SECV Modification */
-+			}
-+		}			
++				;
++			} 
+ 		rc = ima_check_blacklist(iint, modsig, pcr);
+-		/*MODIFICATION ENDS HERE*/
+-		
  	}
- 	if (action & IMA_AUDIT)
- 		ima_audit_measurement(iint, pathname);
+ 
+ 	
+@@ -1315,7 +1283,7 @@ static int __init init_ima(void)
+ 
+ 	if (error && strcmp(hash_algo_name[ima_hash_algo],
+ 			    CONFIG_IMA_DEFAULT_HASH) != 0) {
+-		pr_info("Allocating %s failed, going to use default hash algorithm %s\n",
++		pr_debug("Allocating %s failed, going to use default hash algorithm %s\n",
+ 			hash_algo_name[ima_hash_algo], CONFIG_IMA_DEFAULT_HASH);
+ 		hash_setup_done = 0;
+ 		hash_setup(CONFIG_IMA_DEFAULT_HASH);
+@@ -1380,4 +1348,4 @@ DEFINE_LSM(ima) = {
+ 	.blobs = &ima_blob_sizes,
+ };
+ 
+-late_initcall(init_ima);	/* Start IMA after the TPM is available */
++late_initcall(init_ima);	/* Start IMA after the TPM is available */
+\ No newline at end of file
