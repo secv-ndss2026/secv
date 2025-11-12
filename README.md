@@ -136,8 +136,9 @@ $lmbench-run
 Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.** Where the `vi` screen opens, simply close it by pressing `:q<ENTER>`.
 
 > **Note - configuriaton is reused:** After the first run, lmbench saves previous selections to `/usr/share/lmbench/scripts/CONFIG.s32g399ardb3` and reuses that file on subsequent runs, so you will not be prompted again.
+> If you wish to reconfigure lmbench, simply remove the saved configuration file or rerun `lmbench-run`
 
-After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enhance readability, we provide a script that presents the results in a well-organized manner.
+After 20~50 minutes, the result is stored at `/usr/share/lmbench/results/`. To enhance readability, we provide a script that presents the results in a well-organized manner.
 
 ```sh
 $cd /usr/share/lmbench/results
