@@ -953,10 +953,9 @@ index 0000000000000..3e44e97ba1602
 +
 +struct task_struct;
 +
-+void  *secv_tskalias_base(void);   /* mmu.c에서 EXPORT한 getter */
++void  *secv_tskalias_base(void);   
 +size_t secv_tskalias_size(void);
 +
-+/* 예약 VA 슬롯 할당 + 매핑/해제 */
 +int  secv_taskalias_map_task(struct task_struct *p);
 +void secv_taskalias_unmap_task(struct task_struct *p);
 diff --git a/kernel/fork.c b/kernel/fork.c
