@@ -197,7 +197,7 @@ index 3ebd4f779b9b..83334f1cd904 100644
  	dev->stats.tx_dropped++;
  	return true;
 diff --git a/drivers/net/can/flexcan/flexcan-core.c b/drivers/net/can/flexcan/flexcan-core.c
-index 2800e4ef6cd0..841cd42dec57 100644
+index 2800e4ef6cd0..e9e2fe3ac184 100644
 --- a/drivers/net/can/flexcan/flexcan-core.c
 +++ b/drivers/net/can/flexcan/flexcan-core.c
 @@ -31,9 +31,42 @@
@@ -243,6 +243,21 @@ index 2800e4ef6cd0..841cd42dec57 100644
  #define DRV_NAME			"flexcan"
  
  /* 8 for RX fifo and 2 error handling */
+@@ -530,12 +563,12 @@ static inline void flexcan_write_be(u32 val, void __iomem *addr)
+ 
+ static inline u32 flexcan_read_le(void __iomem *addr)
+ {
+-	return ioread32(addr);
++	return secv_read_le(addr);
+ }
+ 
+ static inline void flexcan_write_le(u32 val, void __iomem *addr)
+ {
+-	iowrite32(val, addr);
++	secv_write_le(val, addr);
+ }
+ 
+ static u32 flexcan_get_timestamp(struct flexcan_priv *priv)
 @@ -550,6 +583,145 @@ static u32 flexcan_get_timestamp(struct flexcan_priv *priv)
  	return timestamp << 16;
  }
@@ -616,7 +631,7 @@ index 2800e4ef6cd0..841cd42dec57 100644
  	if ((priv->can.ctrlmode & CAN_CTRLMODE_3_SAMPLES) &&
  	    (priv->can.ctrlmode & CAN_CTRLMODE_FD)) {
  		netdev_err(dev, "Three Samples mode and CAN-FD mode can't be used together\n");
-@@ -1877,6 +2202,26 @@ static int flexcan_open(struct net_device *dev)
+@@ -1877,6 +2202,31 @@ static int flexcan_open(struct net_device *dev)
  				}
  			}
  
@@ -638,12 +653,17 @@ index 2800e4ef6cd0..841cd42dec57 100644
 +		secv_priv->reg_ctrl_default = priv->reg_ctrl_default;
 +		secv_priv->nsec_initialized = 1;
 +		memset((void*)&secv_local_flexcan_tx_rings[interface_index], 0, sizeof(struct secv_tx_ring_buffers));
++		/** SECV: notify the secure world we have initialized this interface.
++		 *  ATF: trap this SMC call and disable NW access to this interface memory by reconfiguring XRDC for CAN<interface_idx> access control.
++		 *  OPTEE: copy the initialization info from the shared priv to the secure one. 
++		 *  From here on, the shared interface object is only used for sharing state info between NW & SW driver.*/ 
++		secv_flexcan_init_notify(interface_index);
 +	}
 +
  	flexcan_chip_interrupts_enable(dev);
  
  	netif_start_queue(dev);
-@@ -2187,6 +2532,50 @@ static unsigned long get_per_clk_rate(struct clk *clk)
+@@ -2187,6 +2537,50 @@ static unsigned long get_per_clk_rate(struct clk *clk)
  	return rate;
  }
  
@@ -694,7 +714,7 @@ index 2800e4ef6cd0..841cd42dec57 100644
  static int flexcan_probe(struct platform_device *pdev)
  {
  	const struct of_device_id *of_id;
-@@ -2203,6 +2592,56 @@ static int flexcan_probe(struct platform_device *pdev)
+@@ -2203,6 +2597,56 @@ static int flexcan_probe(struct platform_device *pdev)
  	u32 i, clock_freq = 0;
  	bool named_irqs;
  
@@ -751,7 +771,7 @@ index 2800e4ef6cd0..841cd42dec57 100644
  	reg_xceiver = devm_regulator_get_optional(&pdev->dev, "xceiver");
  	if (PTR_ERR(reg_xceiver) == -EPROBE_DEFER)
  		return -EPROBE_DEFER;
-@@ -2316,7 +2755,9 @@ static int flexcan_probe(struct platform_device *pdev)
+@@ -2316,7 +2760,9 @@ static int flexcan_probe(struct platform_device *pdev)
  		return -EINVAL;
  	}
  
@@ -762,7 +782,7 @@ index 2800e4ef6cd0..841cd42dec57 100644
  	if (!dev)
  		return -ENOMEM;
  
-@@ -2399,6 +2840,14 @@ static int flexcan_probe(struct platform_device *pdev)
+@@ -2399,6 +2845,14 @@ static int flexcan_probe(struct platform_device *pdev)
  		dev_info(&pdev->dev, " %d", irq_nos[i]);
  	dev_info(&pdev->dev, ")\n");
  
@@ -894,10 +914,10 @@ index 000000000000..67b8ed729645
 \ No newline at end of file
 diff --git a/drivers/net/can/flexcan/secv_tee.h b/drivers/net/can/flexcan/secv_tee.h
 new file mode 100644
-index 000000000000..5a631fe534f3
+index 000000000000..c217a100792b
 --- /dev/null
 +++ b/drivers/net/can/flexcan/secv_tee.h
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,148 @@
 +#ifndef SECV_TEE_H
 +#define SECV_TEE_H
 +
@@ -938,18 +958,18 @@ index 000000000000..5a631fe534f3
 +                ARM_SMCCC_OWNER_TRUSTED_OS, (func_num))
 +
 +
-+#define OPTEE_FUNCID_CAN_NOTIFY     0xF1
-+#define OPTEE_FUNCID_CAN_READ_BE    0xF2
-+#define OPTEE_FUNCID_CAN_WRITE_BE   0xF3
-+#define OPTEE_FUNCID_CAN_READ_LE    0xF4
-+#define OPTEE_FUNCID_CAN_WRITE_LE   0xF5
-+#define OPTEE_FUNCID_CAN_TRIGGER_TX 0xF6
++#define OPTEE_FUNCID_CAN_INIT_NOTIFY        0xF1
++#define OPTEE_FUNCID_CAN_READ_BE            0xF2
++#define OPTEE_FUNCID_CAN_WRITE_BE           0xF3
++#define OPTEE_FUNCID_CAN_READ_LE            0xF4
++#define OPTEE_FUNCID_CAN_WRITE_LE           0xF5
++#define OPTEE_FUNCID_CAN_TRIGGER_TX         0xF6
 +#define OPTEE_FUNCID_CAN_ALLOCATE_BUFFER    0xFC
 +#define OPTEE_FUNCID_CAN_FREE_BUFFER        0xFD
 +
-+#define OPTEE_SMC_FUNCID_CAN_NOTIFY OPTEE_FUNCID_CAN_NOTIFY
-+#define OPTEE_SMC_CALL_CAN_NOTIFY   \
-+                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_NOTIFY)
++#define OPTEE_SMC_FUNCID_CAN_INIT_NOTIFY OPTEE_FUNCID_CAN_INIT_NOTIFY
++#define OPTEE_SMC_CALL_CAN_INIT_NOTIFY   \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_INIT_NOTIFY)
 +
 +#define OPTEE_SMC_FUNCID_CAN_READ_BE    OPTEE_FUNCID_CAN_READ_BE
 +#define OPTEE_SMC_CALL_CAN_READ_BE  \
@@ -988,7 +1008,7 @@ index 000000000000..5a631fe534f3
 +        0,  // a7
 +        &res
 +    );
-+    return (uint32_t)res.a0;
++    return (uint32_t)res.a1;
 +}
 +
 +
@@ -1017,6 +1037,23 @@ index 000000000000..5a631fe534f3
 +    struct arm_smccc_res res;
 +
 +    arm_smccc_smc(OPTEE_SMC_CALL_CAN_TRIGGER_TX, // a0
++        interface_index, // a1
++        0,  // a2
++        0,  // a3
++        0,  // a4
++        0,  // a5
++        0,  // a6
++        0,  // a7
++        &res
++    );
++}
++
++__attribute__((always_inline)) static inline void
++secv_flexcan_init_notify(uint32_t interface_index)
++{
++    struct arm_smccc_res res;
++
++    arm_smccc_smc(OPTEE_SMC_CALL_CAN_INIT_NOTIFY, // a0
 +        interface_index, // a1
 +        0,  // a2
 +        0,  // a3

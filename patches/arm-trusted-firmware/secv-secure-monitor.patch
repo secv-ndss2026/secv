@@ -8438,7 +8438,7 @@ index 752b0e501..7ea7e25f2 100644
  	 * BL32_IMAGE and BL32_EXTRA1_IMAGE use the same address
  	 * space. We skip the mapping for BL32_EXTRA1_IMAGE because
 diff --git a/plat/nxp/s32/s32cc/s32_bl31.c b/plat/nxp/s32/s32cc/s32_bl31.c
-index c4878ed7d..67d8db92e 100644
+index c4878ed7d..a9ce0cec4 100644
 --- a/plat/nxp/s32/s32cc/s32_bl31.c
 +++ b/plat/nxp/s32/s32cc/s32_bl31.c
 @@ -11,6 +11,7 @@
@@ -8515,33 +8515,15 @@ index c4878ed7d..67d8db92e 100644
  
  	itr = register_and_check_irq(itr, end, &irq_prop);
  	if (!itr)
-@@ -386,6 +407,51 @@ static interrupt_prop_t *register_scp_notif_irq(interrupt_prop_t *itr,
+@@ -386,6 +407,33 @@ static interrupt_prop_t *register_scp_notif_irq(interrupt_prop_t *itr,
  	return itr;
  }
  
-+// static uint64_t sorhta_flexcan_rx_handler(uint32_t id, uint32_t flags,
-+//     void *handle, void *cookie)
-+// {
-+//     switch (id)
-+//     {
-+//     case (43):
-+//     case (44):
-+//     {
-+//         panic();
-+//     }
-+//     default:
-+//         panic();
-+//         break;
-+//     }
-+
-+//     return 0;
-+// }
-+
 +// SECV: trap flexcan interrupts to the secure world.
 +static interrupt_prop_t *register_flexcan_rx_irqs(interrupt_prop_t *itr, const interrupt_prop_t* end)
 +{
 +	interrupt_prop_t irq_prop;
-+	int rx_irq_nums[] = {39+32,40+32, 43+32, 44+32};
++	int rx_irq_nums[] = {39+32, 40+32, 43+32, 44+32};
 +	int index = 0;
 +	for(index=0; index < 4; index++){
 +		int rx_irq_num = rx_irq_nums[index];
@@ -8567,16 +8549,15 @@ index c4878ed7d..67d8db92e 100644
  static interrupt_prop_t *register_hse_irqs(interrupt_prop_t *itr,
  					   const interrupt_prop_t *end)
  {
-@@ -470,6 +536,8 @@ static void register_irqs(void)
+@@ -470,6 +518,7 @@ static void register_irqs(void)
  	if (has_hse)
  		itr = register_hse_irqs(itr, end);
  
 +	itr = register_flexcan_rx_irqs(itr, end);
-+	//itr = register_flexcan_rx_irq2(itr, end);
  	if (!itr)
  		return;
  
-@@ -539,13 +607,13 @@ void init_cntvoff_el2(void)
+@@ -539,13 +588,13 @@ void init_cntvoff_el2(void)
  
  void bl31_plat_arch_setup(void)
  {
