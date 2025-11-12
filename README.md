@@ -168,7 +168,7 @@ For real-world workloads, we check only whether all CAN messages are transmitted
 Run:
 
 ```sh
-$./scripts/rw_canperf.sh -t can0 -r can1 -o 0x4 ./datasets/<any_log_file.log>
+$./scripts/rw_canperf.sh -t can0 -r can1 -o 4 ./datasets/<any_log_file.log>
 ```
 
 Since we transmit 10000 for each log file, you should confirm that 10000 messages are transmitted (by checking the printed Tx frames) after the experiment runs. As the messages don't conform to our IVN GW expected messages, we don't receive responses for this particular experiment. Nonetheless, we manage to confirm that SECV meets all the deadlines of realworld transmissions.
