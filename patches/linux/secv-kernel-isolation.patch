@@ -1,434 +1,588 @@
-diff --git a/arch/arm64/kernel/secv/secv_hooks.h b/arch/arm64/kernel/secv/secv_hooks.h
+diff --git a/arch/arm64/Kbuild b/arch/arm64/Kbuild
+index 5bfbf7d79c99..b881b3a586ee 100644
+--- a/arch/arm64/Kbuild
++++ b/arch/arm64/Kbuild
+@@ -7,3 +7,5 @@ obj-$(CONFIG_CRYPTO)	+= crypto/
+ 
+ # for cleaning
+ subdir- += boot
++
++obj-y += secv/
+\ No newline at end of file
+diff --git a/arch/arm64/include/asm/pgtable.h b/arch/arm64/include/asm/pgtable.h
+index 07bdf5dd8ebe..38a7ecf79505 100644
+--- a/arch/arm64/include/asm/pgtable.h
++++ b/arch/arm64/include/asm/pgtable.h
+@@ -35,6 +35,10 @@
+ #include <linux/sched.h>
+ #include <linux/page_table_check.h>
+ 
++#include <linux/secv/secv_idc.h>
++#include <linux/secv/secv_flag.h>
++#include <linux/percpu.h>
++
+ #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+ #define __HAVE_ARCH_FLUSH_PMD_TLB_RANGE
+ 
+@@ -261,18 +265,27 @@ static inline pte_t pte_mkdevmap(pte_t pte)
+ 	return set_pte_bit(pte, __pgprot(PTE_DEVMAP | PTE_SPECIAL));
+ }
+ 
++
+ static inline void set_pte(pte_t *ptep, pte_t pte)
+ {
+-	WRITE_ONCE(*ptep, pte);
+-
+-	/*
+-	 * Only if the new pte is valid and kernel, otherwise TLB maintenance
+-	 * or update_mmu_cache() have the necessary barriers.
+-	 */
+-	if (pte_valid_not_user(pte)) {
+-		dsb(ishst);
+-		isb();
++	if(!secv_flag_test(SCALL_SET_PTE)){ // first time enters IDC 
++		
++		IDC(SCALL_SET_PTE, (u64)(uintptr_t)ptep, (u64)pte_val(pte), 0, 0); // call set_pte() 
++		return;
+ 	}
++		
++		WRITE_ONCE(*ptep, pte);
++
++		/*
++	 	* Only if the new pte is valid and kernel, otherwise TLB maintenance
++	 	* or update_mmu_cache() have the necessary barriers.
++	 	*/
++	
++		if (pte_valid_not_user(pte)) {
++			dsb(ishst);
++			isb();
++		}	
++		return;
+ }
+ 
+ extern void __sync_icache_dcache(pte_t pteval);
+@@ -632,6 +645,12 @@ static inline void set_pmd(pmd_t *pmdp, pmd_t pmd)
+ 	}
+ #endif /* __PAGETABLE_PMD_FOLDED */
+ 
++	if(!secv_flag_test(SCALL_SET_PMD)){ // first time enters IDC 
++		
++		IDC(SCALL_SET_PMD, (u64)(uintptr_t)pmdp, (u64)pmd_val(pmd), 0, 0); // call set_pte() 
++		return;
++	}
++
+ 	WRITE_ONCE(*pmdp, pmd);
+ 
+ 	if (pmd_valid(pmd)) {
+@@ -695,6 +714,12 @@ static inline void set_pud(pud_t *pudp, pud_t pud)
+ 	}
+ #endif /* __PAGETABLE_PUD_FOLDED */
+ 
++	if(!secv_flag_test(SCALL_SET_PUD)){ // first time enters IDC 
++		
++		IDC(SCALL_SET_PUD, (u64)(uintptr_t)pudp, (u64)pud_val(pud), 0, 0); 
++		return;
++	}
++
+ 	WRITE_ONCE(*pudp, pud);
+ 
+ 	if (pud_valid(pud)) {
+@@ -943,6 +968,14 @@ static inline int pmdp_test_and_clear_young(struct vm_area_struct *vma,
+ static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
+ 				       unsigned long address, pte_t *ptep)
+ {
++	
++
++	if(!secv_flag_test(SCALL_PTEP_GET_CLEAR)){ // first time enters IDC 
++		pte_t t_ret;
++		IDC(SCALL_PTEP_GET_CLEAR, (u64)(uintptr_t)mm, (u64)address, (u64)(uintptr_t)ptep, (u64)(uintptr_t)&t_ret); 
++		return t_ret;
++	}
++
+ 	pte_t pte = __pte(xchg_relaxed(&pte_val(*ptep), 0));
+ 
+ 	page_table_check_pte_clear(mm, pte);
+@@ -976,6 +1009,12 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addres
+ 	do {
+ 		old_pte = pte;
+ 		pte = pte_wrprotect(pte);
++
++		if(!secv_flag_test(SCALL_PTEP_SET_WRPROTECT)){ // first time enters IDC 
++		
++		IDC(SCALL_PTEP_SET_WRPROTECT, (u64)(uintptr_t)mm, (u64)address, (u64)(uintptr_t)ptep, 0); 
++		return;
++	}
+ 		pte_val(pte) = cmpxchg_relaxed(&pte_val(*ptep),
+ 					       pte_val(old_pte), pte_val(pte));
+ 	} while (pte_val(pte) != pte_val(old_pte));
+@@ -994,6 +1033,26 @@ static inline pmd_t pmdp_establish(struct vm_area_struct *vma,
+ 		unsigned long address, pmd_t *pmdp, pmd_t pmd)
+ {
+ 	page_table_check_pmd_set(vma->vm_mm, pmdp, pmd);
++	
++	if(!secv_flag_test(SCALL_PMDP_ESTABLISH)){ // first time enters IDC 
++		struct secv_pmdp_establish_args {
++    		struct vm_area_struct *vma;
++			unsigned long address;
++			pmd_t *pmdp;
++			u64 pmd_val; 
++		} a;
++
++		a.vma     = vma;
++		a.address = address;
++		a.pmdp    = pmdp;
++		a.pmd_val = (u64)pmd_val(pmd);
++		
++		pmd_t t_ret;
++
++		IDC(SCALL_PMDP_ESTABLISH, (u64)(uintptr_t)&a, (u64)(uintptr_t)&t_ret, 0, 0); 
++		return t_ret;
++	}
++
+ 	return __pmd(xchg_relaxed(&pmd_val(*pmdp), pmd_val(pmd)));
+ }
+ #endif
+@@ -1118,4 +1177,4 @@ extern void ptep_modify_prot_commit(struct vm_area_struct *vma,
+ 				    pte_t old_pte, pte_t new_pte);
+ #endif /* !__ASSEMBLY__ */
+ 
+-#endif /* __ASM_PGTABLE_H */
++#endif /* __ASM_PGTABLE_H */
+\ No newline at end of file
+diff --git a/arch/arm64/include/asm/uaccess.h b/arch/arm64/include/asm/uaccess.h
+index 14be5000c5a0..7e40108d6614 100644
+--- a/arch/arm64/include/asm/uaccess.h
++++ b/arch/arm64/include/asm/uaccess.h
+@@ -26,6 +26,9 @@
+ #include <asm/memory.h>
+ #include <asm/extable.h>
+ 
++#include <linux/secv/secv_idc.h>
++#include <linux/secv/secv_flag.h>
++
+ static inline int __access_ok(const void __user *ptr, unsigned long size);
+ 
+ /*
+@@ -371,14 +374,28 @@ extern unsigned long __must_check __arch_copy_from_user(void *to, const void __u
+ })
+ 
+ extern unsigned long __must_check __arch_copy_to_user(void __user *to, const void *from, unsigned long n);
++
++
++static unsigned long secv_raw_copy_to_user_wrapper(void __user *to, const void *from, unsigned long n) {
++	unsigned long __actu_ret;
++	struct task_struct* tsk = current;
++	/* SECV [TODO]: Check if writing to message buffer from the inner kernel */
++	if(tsk->can_buffer_rec != NULL && 
++		((uintptr_t)to >= (uintptr_t)tsk->can_buffer_rec->buffer) && 
++		(uintptr_t)to < ((uintptr_t)to + PAGE_SIZE) && !secv_flag_test(SCALL_ANY)){
++			return n; 
++	}else
++	{
++		uaccess_ttbr0_enable();
++		__actu_ret = __arch_copy_to_user(__uaccess_mask_ptr(to), (from), (n));
++		uaccess_ttbr0_disable();
++		return __actu_ret;
++	}
++}
++
+ #define raw_copy_to_user(to, from, n)					\
+-({									\
+-	unsigned long __actu_ret;					\
+-	uaccess_ttbr0_enable();						\
+-	__actu_ret = __arch_copy_to_user(__uaccess_mask_ptr(to),	\
+-				    (from), (n));			\
+-	uaccess_ttbr0_disable();					\
+-	__actu_ret;							\
++({									\						
++	secv_raw_copy_to_user_wrapper(to, from, n);  \
+ })
+ 
+ #define INLINE_COPY_TO_USER
+diff --git a/arch/arm64/kernel/Makefile b/arch/arm64/kernel/Makefile
+index d95b3d6b471a..774d315917c2 100644
+--- a/arch/arm64/kernel/Makefile
++++ b/arch/arm64/kernel/Makefile
+@@ -75,6 +75,11 @@ obj-$(CONFIG_COMPAT_VDSO)		+= vdso32-wrap.o
+ obj-$(CONFIG_UNWIND_PATCH_PAC_INTO_SCS)	+= patch-scs.o
+ CFLAGS_patch-scs.o			+= -mbranch-protection=none
+ 
++#For SECV
++obj-y += secv/inner.o
++obj-y += secv/secv_idc.o
++obj-y += secv/secv_flag.o
++
+ # Force dependency (vdso*-wrap.S includes vdso.so through incbin)
+ $(obj)/vdso-wrap.o: $(obj)/vdso/vdso.so
+ $(obj)/vdso32-wrap.o: $(obj)/vdso32/vdso.so
+diff --git a/arch/arm64/kernel/process.c b/arch/arm64/kernel/process.c
+index 0fcc4eb1a7ab..e978c8f5be79 100644
+--- a/arch/arm64/kernel/process.c
++++ b/arch/arm64/kernel/process.c
+@@ -279,12 +279,12 @@ void flush_thread(void)
+ 	flush_tagged_addr_state();
+ }
+ 
+-void arch_release_task_struct(struct task_struct *tsk)
++void __secv_tsk arch_release_task_struct(struct task_struct *tsk)
+ {
+ 	fpsimd_release_task(tsk);
+ }
+ 
+-int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
++int __secv_tsk arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
+ {
+ 	if (current->mm)
+ 		fpsimd_preserve_current_state();
+@@ -342,7 +342,7 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
+ 
+ asmlinkage void ret_from_fork(void) asm("ret_from_fork");
+ 
+-int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
++int __secv_tsk copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
+ {
+ 	unsigned long clone_flags = args->flags;
+ 	unsigned long stack_start = args->stack;
+diff --git a/arch/arm64/kernel/secv/inner.c b/arch/arm64/kernel/secv/inner.c
 new file mode 100644
-index 0000000000000..8ac44974362e2
+index 000000000000..a026eae0854f
 --- /dev/null
-+++ b/arch/arm64/kernel/secv/secv_hooks.h
-@@ -0,0 +1,76 @@
-+/* arch/arm64/kernel/secv/secv_hooks.h
-+ * redirect existing functions to wrapper functions
++++ b/arch/arm64/kernel/secv/inner.c
+@@ -0,0 +1,264 @@
++/* arch/arm64/kernel/secv/inner.c
++ * actions taken in inner domain 
++ * including inner domain handler
++ *  -from inner domain stack to inner requests specification
 + */
 +
-+#ifndef __LINUX_SECV_HOOKS_H__
-+#define __LINUX_SECV_HOOKS_H__
-+
-+#pragma once
-+#if !defined(__VDSO__) && !defined(__ASSEMBLY__)
++#include <linux/kernel.h>
++#include <linux/printk.h>
++#include <linux/init.h>
++#include <linux/types.h>
++#include <linux/bug.h>
++#include <linux/mm.h>
++#include <linux/mm_types.h>
++#include <linux/pgtable.h>
++#include <linux/uaccess.h>
++#include <linux/lsm_hooks.h>
++#include <linux/bitfield.h>
++#include <linux/bitops.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/pagemap.h>
 +
 +#include <linux/atomic.h>
 +#include <linux/percpu.h>
-+#include <linux/printk.h>
++#include <linux/errno.h>
 +#include <linux/debugfs.h>
-+#include <linux/uaccess.h>
-+#include <asm/pgtable-types.h>
-+#include <linux/mm_types.h>
-+#include <linux/pgtable.h>
++#include <linux/seq_file.h>
 +
-+struct mm_struct;
-+struct vm_area_struct;
++#include <asm/barrier.h>
++#include <asm/memory.h>
++#include <asm/pgtable.h>
++#include <asm/tlbflush.h>
++#include <asm/cpufeature.h>
++#include <asm/mmu_context.h>
++#include <asm/smp.h>
++#include <asm-generic/pgalloc.h>
 +
-+void __secv_set_pte(pte_t *ptep, pte_t pte);
-+int __secv_ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep);
-+void __secv_ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep);
-+void __secv_pmdp_establish(struct vm_area_struct *vma, unsigned long addr, pmd_t *pmdp, pmd_t pmd);      
-+void __secv_outer_set_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep, pte_t pte);
-+void __secv_pgd_free(struct mm_struct *mm, pgd_t *pgd);
-+int __secv_ptep_set_access_flags(struct vm_area_struct *vma, unsigned long address, pte_t *ptep, pte_t entry, int dirty);
++#include <linux/syscalls.h> 
++#include <linux/sched/task.h>
 +
++#include <linux/binfmts.h>
++#include <linux/secv/secv_lsm.h>
++#include <linux/secv/secv_idc.h>
++#include <linux/secv/secv_hooks.h>
 +
-+#ifdef set_pte
-+#undef set_pte
-+#endif
++/* can be different depending on specs */
++#define NUM_CORES  4           
++#define STACK_SIZE PAGE_SIZE
 +
++/* to ensure per cpu actions */
++DEFINE_PER_CPU(bool, secv_inflight);
++static atomic_t secv_idc_mode = ATOMIC_INIT(0); 
++DEFINE_PER_CPU(u64, cnt_bprm);
++DEFINE_PER_CPU(u64, cnt_open);
++DEFINE_PER_CPU(u64, cnt_mmap);
++DEFINE_PER_CPU(u64, cnt_task_alloc);
 +
-+#ifdef set_pud
-+#undef set_pud
-+#endif
-+
-+
-+#ifdef ptep_test_and_clear_young
-+#undef ptep_test_and_clear_young
-+#endif
-+
-+#ifdef ptep_set_wrprotect
-+#undef ptep_set_wrprotect
-+#endif
-+
-+#ifdef pmdp_establish
-+#undef pmdp_establish
-+#endif
-+
-+#ifdef set_pte_at
-+#undef set_pte_at
-+#endif
-+
-+#ifdef ptep_set_access_flags
-+#undef ptep_set_access_flags
-+#endif
-+
-+#ifdef do_fault
-+#undef do_fault
-+#endif
-+
-+/* define all macros after undefining them */
-+#define set_pte(ptep, pte) __secv_set_pte((ptep), (pte))
-+#define ptep_test_and_clear_young(vma, address, ptep) __secv_ptep_test_and_clear_young((vma), (address), (ptep))
-+#define ptep_set_wrprotect(mm, addr, ptep) __secv_ptep_set_wrprotect((mm), (addr), (ptep))
-+#define pmdp_establish(vma, address, pmdp, pmd) __secv_pmdp_establish((vma), (address), (pmdp), (pmd))
-+#define set_pte_at(mm, address, ptep, pte) __secv_outer_set_pte_at((mm), (address), (ptep), (pte))
-+#define ptep_set_access_flags(vma, addr, ptep, entry, dirty)  __secv_ptep_set_access_flags((vma),(addr),(ptep),(entry),(dirty))
-+#define do_fulat(vmf) __secv_do_fault((vmf))
-+
-+#endif 
-+#endif
-diff --git a/arch/arm64/kernel/secv/secv_hooks_impl.c b/arch/arm64/kernel/secv/secv_hooks_impl.c
-new file mode 100644
-index 0000000000000..b34f8712fdcde
---- /dev/null
-+++ b/arch/arm64/kernel/secv/secv_hooks_impl.c
-@@ -0,0 +1,76 @@
-+/* arch/arm64/kernel/secv/secv_hooks_impl.c
-+ * implemenation about secv hook functions 
-+ * redirect existing page-related functions to secv functions which call IDC wrappers
-+ */
-+#include <linux/mm.h>
-+#include <linux/pgtable.h>
-+#include <linux/export.h>
-+#include "secv_idc.h"
-+
-+/* wrapper functions list*/
-+void __secv_set_pte(pte_t *ptep, pte_t pte);
-+void __secv_set_pud(pud_t *pudp, pud_t pud);
-+int  __secv_ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep);
-+void __secv_ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep);
-+void __secv_pmdp_establish(struct vm_area_struct *vma, unsigned long addr, pmd_t *pmdp, pmd_t pmd);
-+void __secv_outer_set_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep, pte_t pte);
-+void __secv_pgd_free(struct mm_struct *mm, pgd_t *pgd);
-+int __secv_ptep_set_access_flags(struct vm_area_struct *vma, unsigned long address, pte_t *ptep, pte_t entry, int dirty);
-+int __secv_do_fault(struct vm_fault *vmf);
-+
-+u64 inner_domain_handler(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
-+
-+void __secv_set_pte(pte_t *ptep, pte_t pte)
-+{
-+    secv_outer_set_pte(ptep, pte); 
-+} 
-+EXPORT_SYMBOL_GPL(__secv_set_pte);
-+
-+void __secv_set_pud(pud_t *pudp, pud_t pud)
-+{
-+    secv_outer_set_pud(pudp, pud); 
-+}
-+EXPORT_SYMBOL_GPL(__secv_set_pud);
-+
-+
-+int __secv_ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
-+{
-+    return (int)secv_ptep_test_and_clear_young(vma, addr, ptep); 
-+} 
-+EXPORT_SYMBOL_GPL(__secv_ptep_test_and_clear_young);
-+
-+void __secv_ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
-+{
-+    secv_ptep_set_wrprotect(mm, addr, ptep); 
-+}
-+EXPORT_SYMBOL_GPL(__secv_ptep_set_wrprotect);
-+
-+void __secv_pmdp_establish(struct vm_area_struct *vma, unsigned long addr, pmd_t *pmdp, pmd_t pmd)
-+{
-+    secv_pmdp_establish(vma, addr, pmdp, pmd); 
-+} 
-+EXPORT_SYMBOL_GPL(__secv_pmdp_establish);
-+
-+void __secv_outer_set_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep, pte_t pte)
-+{
-+    secv_outer_set_pte_at(mm, addr, ptep, pte); 
-+} 
-+EXPORT_SYMBOL_GPL(__secv_outer_set_pte_at);
-+
-+void __secv_pgd_free(struct mm_struct *mm, pgd_t *pgd)
-+{
-+    secv_pgd_free(mm, pgd); 
-+}
-+EXPORT_SYMBOL_GPL(__secv_pgd_free);
-+
-+int __secv_ptep_set_access_flags(struct vm_area_struct *vma, unsigned long address, pte_t *ptep, pte_t entry, int dirty)
-+{
-+    return secv_ptep_set_access_flags(vma, address, ptep, entry, dirty);
-+}
-+EXPORT_SYMBOL_GPL(__secv_ptep_set_access_flags);
-+
-+int __secv_do_fault(struct vm_fault *vmf)
-+{
-+    return secv_do_fault(vmf);
-+}
-+EXPORT_SYMBOL_GPL(__secv_do_fault);
-\ No newline at end of file
-diff --git a/arch/arm64/kernel/secv/secv_idc.S b/arch/arm64/kernel/secv/secv_idc.S
-new file mode 100644
-index 0000000000000..bdae1322ffa59
---- /dev/null
-+++ b/arch/arm64/kernel/secv/secv_idc.S
-@@ -0,0 +1,78 @@
-+/**
-+ * Inner Domain Call (IDC)
-+ *
-+ * @param cmd a command -> ex: what action does inner domain handler take?
-+ * @param [arg0-arg3] four parameters -> arguments for cmd => ex: cmd(arg0 = x0, arg0 = x1, arg1 = x2, arg2 = x3, arg3 = x4)
-+ */
-+
-+.global IDC
-+.extern inner_domain_handler
-+.extern inner_domain_stack
-+
-+IDC:
-+    /* The entry gate */
-+    mrs x5, DAIF 
-+    stp x30, x5, [sp, #-16]!            
-+    msr DAIFset, 0x3
-+
-+1:
-+    /* Set TCR.T1SZ to 25*/
-+
-+    mrs x5, tcr_el1 
-+    and x5, x5, #0xfffffffffffdffff
-+    orr x5, x5, #0x400000
-+    msr tcr_el1, x5
-+    isb 
-+
-+    /* Check the TCR value */
-+    mov x6, #0xc03f
-+    mov x7, #0x1b 
-+    movk x6, #0xc07f, lsl #16
-+    movk x7, #0x8059, lsl #16 
-+    and x5, x5, x6 
-+    cmp x5, x7 
-+    b.ne 1b
-+
-+    /* per-CPU inner stack */
-+    mrs x6, mpidr_el1 
-+    ubfx x5, x6, #8, #4
-+    and x6, x6, #0xf
-+    orr x6, x6, x5, lsl #2
-+    add x6, x6, #1 
-+
-+    /* switch to the inner domain stack */
-+    adrp x5, inner_domain_stack 
-+    add x5, x5, :lo12:inner_domain_stack 
-+    add x5, x5, x6, lsl #12
-+
-+    mov x6, sp 
-+    mov sp, x5 
-+    str x6, [sp, #-8]! 
-+    
-+    /* invoke inner domain handler with parsed arguments from IDC */
-+    adrp x7, inner_domain_handler
-+    add x7, x7, :lo12:inner_domain_handler
-+    blr x7 
-+
-+    /* The exit gate */
-+    ldr x6, [sp], #8
-+    mov sp, x6
-+
-+    /* Set TCR.T1SZ to 27 */
-+    mrs x5, tcr_el1
-+    and x5, x5, #0xffffffffffbfffff
-+    orr x5, x5, #0x20000
-+    msr tcr_el1, x5 
-+
-+    mov x6, #0xc03f 
-+    mov x7, #0x1b 
-+    movk x6, #0xc07f, lsl #16 
-+    movk x7, #0x801b, lsl #16 
-+    and x5, x5, x6 
-+    cmp x5, x7 
-+    b.ne 2b 
-+  
-+    ldp x30, x5, [sp], #16 
-+    msr DAIF, x5
-+    isb
-+    ret 
-\ No newline at end of file
-diff --git a/arch/arm64/kernel/secv/secv_idc.h b/arch/arm64/kernel/secv/secv_idc.h
-new file mode 100644
-index 0000000000000..dfb85bc19bfae
---- /dev/null
-+++ b/arch/arm64/kernel/secv/secv_idc.h
-@@ -0,0 +1,132 @@
-+/* arch/arm64/kernel/secv/secv_idc.h
-+ * wrapper functions and request IDs are defined 
-+ */
-+
-+#ifndef _SECV_IDC_H_
-+#define _SECV_IDC_H_
-+
-+#if !defined(__ASSEMBLY__) && !defined(__VDSO__)
-+
-+#include <linux/types.h>
-+#include <asm/pgtable-types.h>   
-+
-+struct vm_area_struct;
-+struct mm_struct;
-+struct task_struct;
-+struct rq;
-+
-+/* pre-define delegated inner functions */
-+#define SCALL_SET_PT    0xCA0ULL
-+#define SCALL_FREE_PGD  0xCA1ULL
-+#define SCALL_SET_PT_AT    0xCA2ULL
-+#define SCALL_SET_ACCESS 0xCA3ULL
-+#define SCALL_DO_FAULT 0xCA4ULL
-+
-+#define SCALL_LSM_BPRM 0xCB0ULL
-+#define SCALL_LSM_OPEN 0xCB1ULL
-+#define SCALL_LSM_MMAP 0xCB2ULL
-+#define SCALL_LSM_TASK_ALLOC 0xCB3ULL
-+#define SCALL_LSM_MPROTECT 0xCB4ULL
-+#define SCALL_LSM_PERMISSION 0xCB5ULL
-+
-+#define  FID_SETPTE                     0x01ULL  
-+#define  FID_SETPUD                     0x02ULL  
-+#define  FID_PTEP_TEST_AND_CLEAR_YOUNG  0x03ULL  
-+#define  FID_PMDP_ESTABLISH             0x04ULL 
-+#define  FID_PTEP_SET_WRPROTECT         0x05ULL 
 +
 +extern u64 IDC(u64 cmd, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
 +
-+/* wrapper functions list */ 
-+static inline void secv_outer_set_pte(pte_t *ptep, pte_t pte);
-+static inline void secv_outer_set_pud(pud_t *pudp, pud_t pud);
-+static inline int  secv_ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep);
-+static inline pmd_t secv_pmdp_establish(struct vm_area_struct *vma, unsigned long addr, pmd_t *pmdp, pmd_t pmd);
-+static inline void secv_ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep);
-+static inline void secv_outer_set_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep, pte_t pte);
-+static inline int secv_ptep_set_access_flags(struct vm_area_struct *vma, unsigned long address, pte_t *ptep, pte_t entry, int dirty);
-+static inline unsigned int secv_do_fault(struct vm_fault *vmf);                        
++asmlinkage __visible noinline notrace
++u64 __section(".text.inner")
++inner_domain_handler(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
 +
-+#include <asm/pgtable.h>  
-+#include <linux/printk.h>
++/* needed for LSM hook delegation */
++extern struct security_hook_heads security_hook_heads;
++/* customed LSM hook list */
++extern struct lsm_id secv_lsmid;
 +
-+/* packed arguments */
-+struct pte_args { 
-+    unsigned long addr; 
-+    pte_t pte; 
-+    unsigned int nr; 
-+};
-+
-+struct ptep_access_args {
-+    struct vm_area_struct *vma;
-+    unsigned long addr;
-+    pte_t *ptep;
-+    pte_t entry;
-+    int   dirty;
-+} __packed;
++__attribute__((section(".bss.inner"), aligned(PAGE_SIZE), used))
++char inner_domain_stack[NR_CPUS * 2 * PAGE_SIZE];
++EXPORT_SYMBOL(inner_domain_stack);
 +
 +
-+/* wrapper functions for innner domain switching
-+ * - page table modificaiton
-+ * trigger IDC -> inner domain handles the request
++static inline long secv_mode_ret(void)
++{
++    return atomic_read(&secv_idc_mode) ? -EPERM : 0;
++}
++
++static  int secv_stats_show(struct seq_file *m, void *p)
++{
++    int cpu; u64 b=0, o=0,mm=0,ta=0;
++    for_each_possible_cpu(cpu) {
++        b  += per_cpu(cnt_bprm, cpu);
++        o  += per_cpu(cnt_open, cpu);
++        mm += per_cpu(cnt_mmap, cpu);
++        ta += per_cpu(cnt_task_alloc, cpu);
++    }
++    return 0;
++} 
++
++/* inner_domain_handler
++ *  - get arguments from IDC(args...)
++ *  - is called in IDC
++ *  - process transffered actions based on the parsed command ID
++ *  - the first argument is parsed as cmd 
++ *  - from the second ot the fourth are parsed as function's parameters
 + */
-+static inline void secv_outer_set_pte(pte_t *ptep, pte_t pte)
++ 
++u64 inner_domain_handler(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3)
 +{
-+    (void) IDC(SCALL_SET_PT, FID_SETPTE, (u64)(unsigned long)ptep, (u64)pte_val(pte), 0);
++    switch (cmd) {
++        case SCALL_SET_PTE: { 
++            pte_t *ptep = (pte_t *)(uintptr_t)a0;
++		    pte_t  pte  = __pte(a1);
++
++            secv_flag_set(SCALL_SET_PTE);
++            set_pte(ptep, pte);
++            secv_flag_clear(SCALL_SET_PTE);
++        
++            break;
++        }
++        case SCALL_SET_PMD:{
++            pmd_t *pmdp = (pmd_t *)(uintptr_t)a0;
++		    pmd_t  pmd  = __pmd(a1);
++            secv_flag_set(SCALL_SET_PMD);
++            set_pmd(pmdp, pmd);
++            secv_flag_clear(SCALL_SET_PMD);
++        
++            break;
++        }
++        case SCALL_SET_PUD:{
++            pud_t *pudp = (pud_t *)(uintptr_t)a0;
++            pud_t  pud  = __pud(a1);
++            secv_flag_set(SCALL_SET_PUD);
++            set_pud(pudp, pud);
++            secv_flag_clear(SCALL_SET_PUD);
++        
++            break;       
++        }
++        case SCALL_PTEP_GET_CLEAR:{
++            struct mm_struct *mm = (void *)(uintptr_t)a0;
++            unsigned long address = (unsigned long)a1;
++            pte_t *ptep = (pte_t *)(uintptr_t)a2;
++            pte_t *t_ret = (pte_t *)(uintptr_t)a3;
++
++            secv_flag_set(SCALL_PTEP_GET_CLEAR);
++            *t_ret = ptep_get_and_clear(mm, address, ptep);
++            secv_flag_clear(SCALL_PTEP_GET_CLEAR);
++        
++            break;
++        }
++        case SCALL_PTEP_SET_WRPROTECT:{
++            struct mm_struct *mm = (void *)(uintptr_t)a0;
++            unsigned long address = (unsigned long)a1;
++            pte_t *ptep = (pte_t *)(uintptr_t)a2;
++
++            secv_flag_set(SCALL_PTEP_SET_WRPROTECT);
++            ptep_set_wrprotect(mm, address, ptep);
++            secv_flag_clear(SCALL_PTEP_SET_WRPROTECT);
++            
++            break;
++        }
++#ifdef CONFIG_TRANSPARENT_HUGEPAGE
++        case SCALL_PMDP_ESTABLISH:{
++            struct secv_pmdp_establish_args {
++                struct vm_area_struct *vma;
++	            unsigned long address;
++	            pmd_t *pmdp;
++	            u64 pmd_val; 
++            };
++
++            struct secv_pmdp_establish_args *pa = (void *)(uintptr_t)a0;
++            struct vm_area_struct *vma = pa->vma;
++            unsigned long address = pa->address;
++            pmd_t *pmdp = (pmd_t *)(uintptr_t)pa->pmdp;
++            pmd_t  pmd  = __pmd(pa->pmd_val);
++            pmd_t *t_ret = (pmd_t *)(uintptr_t)a1;
++
++            secv_flag_set(SCALL_PMDP_ESTABLISH);
++            *t_ret = pdmp_establish(vma, address, pmdp, pmd);
++            secv_flag_clear(SCALL_PMDP_ESTABLISH);
++
++            break;
++            
++        }
++#endif /* CONFIG_TRANSPARENT_HUGEPAGE */
++        case SCALL_CPU_DO_SWITCH_MM:{
++            phys_addr_t pgd_phys = (phys_addr_t)a0;
++            struct mm_struct *mm = (struct mm_struct *)(uintptr_t)a1;
++
++            secv_flag_set(SCALL_CPU_DO_SWITCH_MM);
++            cpu_do_switch_mm(pgd_phys, mm);
++            secv_flag_clear(SCALL_CPU_DO_SWITCH_MM);
++
++            break;  
++        }
++        case SCALL_PTEP_SET_ACCESS_FLAG:{
++            struct secv_petp_set_access_flags_args {
++                struct vm_area_struct *vma;
++	            unsigned long address;
++	            pte_t *ptep;
++	            pte_t entry;
++                int dirty; 
++            };
++            struct secv_petp_set_access_flags_args *pa = (void *)(uintptr_t)a0;
++            struct vm_area_struct *vma = pa->vma;
++            unsigned long address = pa->address;
++            pte_t *ptep = pa->ptep;
++            pte_t  entry  = pa->entry;
++            int dirty = pa->dirty;
++
++            secv_flag_set(SCALL_PTEP_SET_ACCESS_FLAG);
++            ptep_set_access_flags(vma, address, ptep, entry, dirty);
++            secv_flag_clear(SCALL_PTEP_SET_ACCESS_FLAG);
++
++            break;
++        }
++        case SCALL_PGD_FREE:{
++            struct mm_struct *mm = (struct mm_struct *)(uintptr_t)a0;
++            pgd_t *pgd = (pgd_t *)(uintptr_t)(a1);
++
++            secv_flag_set(SCALL_PGD_FREE);
++            pgd_free(mm, pgd);
++            secv_flag_clear(SCALL_PGD_FREE);
++
++            break;
++        }
++        case SCALL_LOAD_ELF_BINARY:{
++            struct linux_binprm *bprm = (struct linux_binprm *)(uintptr_t)a0;
++            int retval = (int)a1;
++
++            secv_flag_set(SCALL_LOAD_ELF_BINARY);
++            retval = secv_load_elf_binary(bprm);
++            secv_flag_clear(SCALL_LOAD_ELF_BINARY);
++
++            break;
++        }
++        case SCALL_LSM_BPRM: {
++            this_cpu_inc(cnt_bprm);
++            /* decide whether requested LSM hook calls are legal
++             * if this hooked LSM call is illegal, set the mode as deny
++             */ 
++            return secv_mode_ret();
++        }    
++        case SCALL_LSM_OPEN: {
++            this_cpu_inc(cnt_open);
++            // mode decision 
++            return secv_mode_ret();
++        }  
++        case SCALL_LSM_MMAP: {
++            this_cpu_inc(cnt_mmap);
++            // mode decision 
++            return secv_mode_ret();
++        }   
++        case SCALL_LSM_TASK_ALLOC: {
++            this_cpu_inc(cnt_task_alloc);
++            // mode decision 
++            return secv_mode_ret();
++        }
++        case SCALL_LSM_MPROTECT: {
++            this_cpu_inc(cnt_task_alloc);
++            // mode decision 
++            return secv_mode_ret();
++        }
++        case SCALL_LSM_PERMISSION: {
++            this_cpu_inc(cnt_task_alloc);
++            // mode decision 
++            return secv_mode_ret();
++        } 
++    }
++    return 0;
 +}
++EXPORT_SYMBOL(inner_domain_handler);
+\ No newline at end of file
+diff --git a/arch/arm64/kernel/secv/secv_flag.c b/arch/arm64/kernel/secv/secv_flag.c
+new file mode 100644
+index 000000000000..f070c1dd11e9
+--- /dev/null
++++ b/arch/arm64/kernel/secv/secv_flag.c
+@@ -0,0 +1,5 @@
++#include <linux/percpu.h>
++#include <linux/types.h>
 +
-+static inline void secv_outer_set_pud(pud_t *pudp, pud_t pud)
-+{
-+    (void) IDC(SCALL_SET_PT, FID_SETPUD, (u64)(unsigned long)pudp, (u64)pud_val(pud), 0);
-+}
-+
-+static inline int secv_ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
-+{
-+    return (int)IDC(SCALL_SET_PT, FID_PTEP_TEST_AND_CLEAR_YOUNG, (u64)(uintptr_t)vma, (u64)addr, (u64)(uintptr_t)ptep);
-+}
-+
-+static inline pmd_t secv_pmdp_establish(struct vm_area_struct *vma,
-+                                         unsigned long addr, pmd_t *pmdp, pmd_t pmd)
-+{
-+    u64 ret = IDC(SCALL_SET_PT, FID_PMDP_ESTABLISH, (u64)(uintptr_t)vma, (u64)(uintptr_t)pmdp, (u64)pmd_val(pmd)); 
-+    return __pmd(ret); 
-+};
-+
-+static inline void secv_ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
-+{
-+    (void) IDC(SCALL_SET_PT, FID_PTEP_SET_WRPROTECT, (u64)mm, (u64)addr, (u64)ptep);
-+}
-+
-+static inline void secv_outer_set_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep, pte_t pte)
-+{
-+    struct pte_args args = { .addr = addr, .pte = pte };
-+    (void) IDC(SCALL_SET_PT_AT, (u64)(uintptr_t)mm, (u64)(uintptr_t)ptep, (u64)(uintptr_t)&args, 0);
-+}
-+
-+static inline void secv_pgd_free(struct mm_struct *mm, pgd_t *pgd)
-+{
-+    (void) IDC(SCALL_FREE_PGD, (u64)(unsigned long)mm, (u64)(unsigned long)pgd, 0, 0);
-+}
-+
-+static inline int secv_ptep_set_access_flags(struct vm_area_struct *vma, unsigned long address, pte_t *ptep, pte_t entry, int dirty)
-+{
-+    struct ptep_access_args args = {
-+        .vma   = vma,
-+        .addr  = address,
-+        .ptep  = ptep,
-+        .entry = entry,
-+        .dirty = dirty,
-+    };
-+
-+    u64 ret = IDC(SCALL_SET_ACCESS, (u64)(uintptr_t)&args, (u64)sizeof(args), 0, 0);
-+    return ret;
-+}
-+
-+static inline unsigned int secv_do_fault(struct vm_fault *vmf)
-+{
-+    u64 ret = IDC(SCALL_DO_FAULT, (u64)(uintptr_t)vmf, 0, 0, 0);
-+    return ret;
-+}
-+
-+#endif 
-+#endif 
++DEFINE_PER_CPU(u64, __secv_idc_flags_mask);
++EXPORT_SYMBOL(__secv_idc_flags_mask);
 \ No newline at end of file
 diff --git a/arch/arm64/kernel/vmlinux.lds.S b/arch/arm64/kernel/vmlinux.lds.S
-index f84c71f04d9ea..877b2d9567dff 100644
+index 3cd7e76cc562..25f143e13452 100644
 --- a/arch/arm64/kernel/vmlinux.lds.S
 +++ b/arch/arm64/kernel/vmlinux.lds.S
-@@ -183,6 +183,14 @@ SECTIONS
+@@ -150,6 +150,20 @@ PECOFF_FILE_ALIGNMENT = 0x200;
+ #define PECOFF_EDATA_PADDING
+ #endif
+ 
++#define SECV_TEXT           \
++	. = ALIGN(PMD_SIZE);	\
++	__inner_text_start = .; \
++	*(.text.inner)			\
++	__inner_text_end = .;	\
++	. = ALIGN(PAGE_SIZE);	
++
++#define TASK_TEXT           \
++	. = ALIGN(PMD_SIZE);	\
++	__task_text_start = .; \
++	*(.text.task)			\
++	__task_text_end = .;	\
++	. = ALIGN(PAGE_SIZE);	
++
+ SECTIONS
+ {
+ 	/*
+@@ -180,6 +194,8 @@ SECTIONS
+ 			LOCK_TEXT
+ 			KPROBES_TEXT
+ 			HYPERVISOR_TEXT
++			SECV_TEXT
++			TASK_TEXT
  			*(.gnu.warning)
  	}
  
-+	/* --- SECV inner text (.inner.text) --- */
-+	.inner.text : ALIGN(PAGE_SIZE) {
-+    	__inner_text_start = .;
-+    	*(.inner.text)
-+    	__inner_text_end = .;
-+	}
-+
-+
- 	. = ALIGN(SEGMENT_ALIGN);
- 	_etext = .;			/* End of text section */
+@@ -285,10 +301,20 @@ SECTIONS
+ 	__initdata_end = .;
+ 	__init_end = .;
  
-@@ -294,6 +302,20 @@ SECTIONS
++	.data.rel.ro : { *(.data.rel.ro) }
++	ASSERT(SIZEOF(.data.rel.ro) == 0, "Unexpected RELRO detected!")
++
+ 	_data = .;
  	_sdata = .;
  	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_ALIGN)
  
-+	/* --- SECV page table pool (.secv.ptpool) --- */
-+	.secv.ptpool : ALIGN(PAGE_SIZE) {
-+		__pt_pool_start = .;
-+    	*(.secv.ptpool)
-+		__pt_pool_end = .;
-+	}    
-+
 +	/* --- SECV task_struct pool (.secv.tsk) --- */
 +	.secv.tsk : ALIGN(PAGE_SIZE) {
 +		__secv_tsk_start = .;
 +    	*(.secv.tsk)
 +		__secv_tsk_end = .;
-+	} 
++	}
 +
  	/*
  	 * Data written with the MMU off but read with the MMU on requires
  	 * cache lines to be invalidated, discarding up to a Cache Writeback
-@@ -319,6 +341,14 @@ SECTIONS
- 	/* start of zero-init region */
+@@ -313,6 +339,13 @@ SECTIONS
+ 
  	BSS_SECTION(SBSS_ALIGN, 0, 0)
  
 +	/* --- SECV inner bss (.bss.inner) --- */
@@ -437,503 +591,630 @@ index f84c71f04d9ea..877b2d9567dff 100644
 +    	*(.bss.inner)
 +    	__inner_bss_end = .;
 +	}
-+	
 +
  	. = ALIGN(PAGE_SIZE);
  	init_pg_dir = .;
  	. += INIT_DIR_SIZE;
-diff --git a/arch/arm64/mm/mmu.c b/arch/arm64/mm/mmu.c
-index e55b02fbddc8f..225fb2d84f667 100644
---- a/arch/arm64/mm/mmu.c
-+++ b/arch/arm64/mm/mmu.c
-@@ -17,6 +17,7 @@
- #include <linux/mman.h>
- #include <linux/nodemask.h>
- #include <linux/memblock.h>
-+#include <linux/printk.h>
- #include <linux/memremap.h>
- #include <linux/memory.h>
- #include <linux/fs.h>
-@@ -26,6 +27,8 @@
- #include <linux/set_memory.h>
- #include <linux/kfence.h>
- #include <linux/pkeys.h>
-+#include <linux/vmalloc.h>
-+#include <linux/secv_taskalias.h>
- 
- #include <asm/barrier.h>
- #include <asm/cputype.h>
-@@ -41,10 +44,333 @@
- #include <asm/tlbflush.h>
- #include <asm/pgalloc.h>
- #include <asm/kfence.h>
-+#include <asm/memory.h>
-+#include <asm/pgtable.h>
-+
-+/* utilize pre-defined reigion's sybmol for page table region */
-+extern char __pt_pool_start[], __pt_pool_end[];
-+#define SECV_PTPOOL_SIZE   (4UL << 20)  
-+__used __aligned(PAGE_SIZE)
-+static char secv_ptpool_area[SECV_PTPOOL_SIZE]
-+        __section(".secv.ptpool");
-+
-+/* for task_struct slab cache */
-+#define SECV_TSKALIAS_BASE   0xffff800140000000UL   
-+#define SECV_TSKALIAS_SIZE   SZ_32M                
-+
-+extern char __secv_tsk_start[], __secv_tsk_end[];
-+static void            *secv_tsk_base;
-+static size_t           secv_tsk_size;
-+
-+/* for secv page table */
-+static struct vm_struct *secv_alias_vm;
-+static void *secv_alias_base;
-+static size_t secv_alias_size;
-+
-+#define SECV_OFFSET   SZ_256G
- 
- #define NO_BLOCK_MAPPINGS	BIT(0)
- #define NO_CONT_MAPPINGS	BIT(1)
--#define NO_EXEC_MAPPINGS	BIT(2)	/* assumes FEAT_HPDS is not used */
-+#define NO_EXEC_MAPPINGS	BIT(2)
-+
-+/* function prototype */
-+static void init_clear_pgtable(void *table);
-+static phys_addr_t pgd_pgtable_alloc(int shift);
-+static phys_addr_t __pgd_pgtable_alloc(int shift);
-+static void __create_pgd_mapping(pgd_t *pgdir, phys_addr_t phys, unsigned long virt, phys_addr_t size, pgprot_t prot, phys_addr_t (*pgtable_alloc)(int), int flags);
-+static void update_mapping_prot(phys_addr_t phys, unsigned long virt, phys_addr_t size, pgprot_t prot);
-+
-+static bool walk_is_unmapped(unsigned long start, unsigned long size)
-+{
-+    unsigned long va = start, end = start + size;
-+
-+    while (va < end) {
-+        pgd_t *pgd = pgd_offset_k(va);
-+        if (!pgd_none(*pgd)) return false;                 
-+        va = (va + PGDIR_SIZE) & ~(PGDIR_SIZE - 1);
-+    }
-+    return true;
-+}
-+
-+/* reserves shadow mapping region for inner domain page table */
-+static int __init secv_alias_reserve_init(void)
-+{
-+    size_t sz = (size_t)(__pt_pool_end - __pt_pool_start);  
-+    if (!sz) return 0;
-+
-+    secv_alias_vm = get_vm_area(sz, VM_NO_GUARD);
-+    if (!secv_alias_vm) {
-+        pr_warn("[SECV] alias VA reserve failed\n");
-+        return -ENOMEM;
-+    }
-+    secv_alias_base = secv_alias_vm->addr;
-+    secv_alias_size = sz;
-+
-+    pr_debug("[SECV] alias VA reserved: %px..%px size=0x%zx\n",
-+            secv_alias_base, secv_alias_base + sz - 1, sz);
-+    return 0;
-+}
-+core_initcall(secv_alias_reserve_init);
-+
-+
-+/* reserves shadow mapping region for protecting task_struct */
-+static int __init secv_tskalias_reserve_init(void)
-+{
-+    secv_tsk_base = (void *)__secv_tsk_start;
-+    secv_tsk_size = (size_t)(__secv_tsk_end - __secv_tsk_start);
-+
-+    if (!secv_tsk_base || !secv_tsk_size) {
-+        pr_warn("[SECV] .secv.tsk invalid (base=%px size=0x%zx)\n",
-+                secv_tsk_base, secv_tsk_size);
-+        return -EINVAL;
-+    }
-+
-+    pr_debug("[SECV] .secv.tsk reserved: %px..%px size=0x%zx (no mapping)\n",
-+            secv_tsk_base, secv_tsk_base + secv_tsk_size - 1, secv_tsk_size);
-+
-+    return 0;
-+}
-+core_initcall(secv_tskalias_reserve_init);
-+
-+
-+/* examine whether the secv memory layout is okay */
-+static void __init secv_layout_sanity_once(void)
-+{
-+#if defined(CONFIG_ARM64_64K_PAGES) || defined(CONFIG_ARM64_16K_PAGES)
-+    pr_warn("[SECV] Non-4K granule detected; re-validate alias offset!\n");
-+#endif
-+#ifdef CONFIG_ARM64_VA_BITS
-+# if (CONFIG_ARM64_VA_BITS != 48)
-+    pr_warn("[SECV] VA_BITS != 48; re-validate alias window & offset!\n");
-+# endif
-+#endif
-+}
-+
-+/* examine whether the secv shadow mapping region is okay */
-+static void __init secv_shadowmap_sanity(void)
-+{
-+    unsigned long pa  = __pa_symbol(__pt_pool_start);
-+    unsigned long pae = __pa_symbol(__pt_pool_end);
-+    unsigned long size  = pae - pa;
-+
-+    BUG_ON(!IS_ALIGNED(pa,  PAGE_SIZE));
-+    BUG_ON(!IS_ALIGNED(size,  PAGE_SIZE));
-+    if (size == 0) {
-+		pr_warn("[SECV] pt-pool empty; shadow aliasing disabled.\n");
-+		return;
-+	}
-+}
-+
-+/* allocate page to secv page table pool region (.secv.ptpool) which pre-defined at linker script */
-+static phys_addr_t __init secv_ptpool_alloc_page(int shift)
-+{
-+    static unsigned long off;
-+    unsigned long size = (unsigned long)(__pt_pool_end - __pt_pool_start);
-+    if (off + PAGE_SIZE > size)
-+        panic("[SECV] PT pool exhausted (offset=%lx, size=%lx)\n", off, size);
-+    phys_addr_t pa = __pa_symbol(__pt_pool_start) + off;
-+    off += PAGE_SIZE;
-+    return pa;
-+}
-+
-+
-+static phys_addr_t __init early_pgtable_alloc(int shift)
-+{
-+    return __pgd_pgtable_alloc(shift);
-+}
-+
-+/* examine whether the range of secv shadow mapping region is valid */
-+static inline bool secv_alias_range_valid(unsigned long va_alias, phys_addr_t sz)
-+{
-+    unsigned long va_end = va_alias + (unsigned long)sz;
-+
-+#ifdef CONFIG_ARM64_VA_BITS
-+    const unsigned long VA_MAX = (~0UL >> (64 - CONFIG_ARM64_VA_BITS));
-+#else
-+    const unsigned long VA_MAX = ~0UL; 
-+#endif
-+    if (va_alias < PAGE_OFFSET || va_end < va_alias || va_end > VA_MAX)
-+        return false;
-+
-+    extern char _stext[], _etext[], _sdata[], _end[];
-+    unsigned long k_lo = (unsigned long)_stext;
-+    unsigned long k_hi = (unsigned long)_end;
-+
-+    if (!(va_end <= k_lo || va_alias >= k_hi))
-+        return false; 
-+
-+    return true;
-+}
-+
-+/* map the page tables for inner domain */
-+static void __init secv_map_pt_pool_inner_alias_rw(void)
-+{
-+    phys_addr_t  pa   = __pa_symbol(__pt_pool_start);
-+    phys_addr_t  sz   = (phys_addr_t)(__pt_pool_end - __pt_pool_start);
-+	unsigned long va_alias = (unsigned long)secv_alias_base;
-+
-+	if (!va_alias || !sz)
-+    return;  
-+
-+    if (!sz) {
-+        pr_warn("[SECV] pt-pool empty; skip alias\n");
-+        return;
-+    }
-+
-+    if (!walk_is_unmapped(va_alias, sz)) {
-+        pr_warn("[SECV] alias VA region busy (va=%px sz=%pa); skip\n", (void*)va_alias, &sz);
-+        return;
-+    }
-+
-+    if (((pa ^ va_alias) & ~PAGE_MASK) != 0) {
-+        pr_warn("[SECV] alias va/pa page-offset mismatch; skip\n");
-+        return;
-+    }
-+
-+    __create_pgd_mapping(init_mm.pgd, pa, va_alias, sz, PAGE_KERNEL, __pgd_pgtable_alloc, NO_CONT_MAPPINGS);
-+
-+    dsb(ishst);
-+    flush_tlb_kernel_range(va_alias, va_alias + sz);
-+    dsb(ish); isb();
-+
-+    pr_debug("[SECV] inner-alias RW: va=%px..%px pa=%pa size=0x%llx\n",
-+            (void*)va_alias, (void*)(va_alias + sz - 1), &pa, (u64)sz);
-+}
-+
-+/* map the ptpool region to reserved alias region within the permission read-writable(RW) */
-+static int __init secv_alias_map_init(void)
-+{
-+    phys_addr_t pa  = __pa_symbol(__pt_pool_start);
-+    size_t      sz  = (size_t)(__pt_pool_end - __pt_pool_start);
-+
-+    if (!secv_alias_base || !secv_alias_size) {
-+        pr_warn("[SECV] alias map: alias VA not reserved\n");
-+        return -ENODEV;
-+    }
-+    if (secv_alias_size < sz) {
-+        pr_warn("[SECV] alias map: reserved size(0x%zx) < ptpool size(0x%zx)\n",
-+                secv_alias_size, sz);
-+        return -EINVAL;
-+    }
-+
-+	/* if required, simple mapping first without the arragnement */
-+    unsigned long va = (unsigned long)secv_alias_base;
-+
-+    /* map with RW */
-+    __create_pgd_mapping(init_mm.pgd, pa, va, sz, PAGE_KERNEL, __pgd_pgtable_alloc, NO_CONT_MAPPINGS);
-+
-+    flush_tlb_kernel_range(va, va + sz);
-+
-+    pr_debug("[SECV] alias RW-mapped: va=%px..%px pa=%pa size=0x%zx\n", (void *)va, (void *)(va + sz - 1), &pa, sz);
-+    return 0;
-+}
-+core_initcall(secv_alias_map_init);
-+
-+
-+/* set the permission read-only(RO) for one table */
-+static inline void secv_mark_one_table_ro(phys_addr_t table_phys)
-+{
-+    unsigned long table_va = (unsigned long)__va(table_phys) & PAGE_MASK;
-+    update_mapping_prot(table_phys, table_va, PAGE_SIZE, PAGE_KERNEL_RO);
-+}
-+
-+/* set the permission RO using secv_mark_one_table_ro for each page level */
-+static void __init secv_mark_pt_tables_ro_linear(unsigned long va_start, unsigned long va_end)
-+{
-+    unsigned long va = va_start;
-+
-+    for (va = va_start; va < va_end; ) {
-+        pgd_t *pgd = pgd_offset_k(va);
-+        if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd))) {
-+            va = (va + PGDIR_SIZE) & ~(PGDIR_SIZE - 1);
-+            continue;
-+        }
-+
-+        p4d_t *p4d = p4d_offset(pgd, va);
-+        if (p4d_none(*p4d) || unlikely(p4d_bad(*p4d))) {
-+            va = (va + P4D_SIZE) & ~(P4D_SIZE - 1);
-+            continue;
-+        }
-+#ifndef __PAGETABLE_P4D_FOLDED      
-+        secv_mark_one_table_ro(p4d_page_paddr(READ_ONCE(*p4d)));
-+#endif
-+        pud_t *pud = pud_offset(p4d, va);
-+
-+        if (pud_none(*pud) || unlikely(pud_bad(*pud))) {
-+            va = (va + PUD_SIZE) & ~(PUD_SIZE - 1);
-+            continue;
-+        }
-+        if (pud_sect(READ_ONCE(*pud))) {
-+            va = (va + PUD_SIZE) & ~(PUD_SIZE - 1);
-+            continue; 
-+        }
-+
-+        secv_mark_one_table_ro(pud_page_paddr(READ_ONCE(*pud)));
-+
-+        pmd_t *pmd = pmd_offset(pud, va);
-+        if (pmd_none(READ_ONCE(*pmd)) || unlikely(pmd_bad(READ_ONCE(*pmd)))) {
-+            va = (va + PMD_SIZE) & ~(PMD_SIZE - 1);
-+            continue;
-+        }
-+        if (pmd_sect(READ_ONCE(*pmd))) {
-+            va = (va + PMD_SIZE) & ~(PMD_SIZE - 1);
-+            continue;
-+        }
-+
-+        secv_mark_one_table_ro(pmd_page_paddr(READ_ONCE(*pmd)));
-+
-+        va = (va + PMD_SIZE) & ~(PMD_SIZE - 1);
-+    }
-+
-+    flush_tlb_kernel_range(va_start, va_end);
-+    dsb(ish);
-+    isb();
-+}
-+
-+/* broader permisison RO setter function */
-+static __maybe_unused void __init secv_protect_outer_pt_tables(void)
-+{
-+    unsigned long lm_start = (unsigned long)__va(0);      
-+    unsigned long lm_end   = _PAGE_END(VA_BITS_MIN);   
-+
-+    secv_mark_pt_tables_ro_linear(lm_start, lm_end);
-+}
-+
-+/* begin the RO setting */
-+static int __init secv_protect_outer_pt_tables_late(void)
-+{
-+    secv_protect_outer_pt_tables();  
-+    return 0;
-+}
-+late_initcall(secv_protect_outer_pt_tables_late);
-+
-+/* for task_struct protection */
-+void *secv_tskalias_base(void)  { return secv_tsk_base; }
-+size_t secv_tskalias_size(void) { return secv_tsk_size; }
-+EXPORT_SYMBOL_GPL(secv_tskalias_base);
-+EXPORT_SYMBOL_GPL(secv_tskalias_size);
-+
-+static __maybe_unused int __init secv_lock_ptpool_ro_late(void)
-+{
-+    phys_addr_t pa = __pa_symbol(__pt_pool_start);
-+    phys_addr_t size = (phys_addr_t)(__pt_pool_end - __pt_pool_start);
-+
-+    if (size) {
-+		unsigned long va_linear = (unsigned long)lm_alias(__pt_pool_start);
-+        update_mapping_prot(pa, va_linear, size, PAGE_KERNEL_RO);
-+        pr_debug("[SECV] ptpool RO-locked: va=%px..%px  pa=%pa  size=0x%llx\n",
-+                (void *)va_linear, (void *)(va_linear + size - 1), &pa, (u64)size);
-+    } else {
-+        pr_warn("[SECV] ptpool is empty; skip RO lock\n");
-+    }
-+    return 0;
-+}
-+late_initcall(secv_lock_ptpool_ro_late);
-+
-+
-+static phys_addr_t pgd_pgtable_alloc(int shift);
-+int pud_clear_huge(pud_t *pudp);
-+int pmd_clear_huge(pmd_t *pmdp);
- 
- u64 kimage_voffset __ro_after_init;
- EXPORT_SYMBOL(kimage_voffset);
-@@ -107,18 +433,6 @@ pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
- }
- EXPORT_SYMBOL(phys_mem_access_prot);
- 
--static phys_addr_t __init early_pgtable_alloc(int shift)
--{
--	phys_addr_t phys;
--
--	phys = memblock_phys_alloc_range(PAGE_SIZE, PAGE_SIZE, 0,
--					 MEMBLOCK_ALLOC_NOLEAKTRACE);
--	if (!phys)
--		panic("Failed to allocate page table page\n");
--
--	return phys;
--}
--
- bool pgattr_change_is_safe(u64 old, u64 new)
- {
- 	/*
-@@ -158,6 +472,7 @@ bool pgattr_change_is_safe(u64 old, u64 new)
- 	return ((old ^ new) & ~mask) == 0;
- }
- 
-+
- static void init_clear_pgtable(void *table)
- {
- 	clear_page(table);
-@@ -473,17 +788,16 @@ void create_kpti_ng_temp_pgd(pgd_t *pgdir, phys_addr_t phys, unsigned long virt,
- 
- static phys_addr_t __pgd_pgtable_alloc(int shift)
- {
--	/* Page is zeroed by init_clear_pgtable() so don't duplicate effort. */
--	void *ptr = (void *)__get_free_page(GFP_PGTABLE_KERNEL & ~__GFP_ZERO);
--
--	BUG_ON(!ptr);
--	return __pa(ptr);
-+	phys_addr_t pa = memblock_phys_alloc(PAGE_SIZE, PAGE_SIZE);
-+	if (!pa)
-+		panic("%s: memblock_phys_alloc failed\n", __func__);
-+	return pa;
- }
- 
- static phys_addr_t pgd_pgtable_alloc(int shift)
- {
- 	phys_addr_t pa = __pgd_pgtable_alloc(shift);
--	struct ptdesc *ptdesc = page_ptdesc(phys_to_page(pa));
-+	struct ptdesc *ptdesc = page_ptdesc(phys_to_page(pa)); 
- 
- 	/*
- 	 * Call proper page table ctor in case later we need to
-@@ -493,6 +807,7 @@ static phys_addr_t pgd_pgtable_alloc(int shift)
- 	 * We don't select ARCH_ENABLE_SPLIT_PMD_PTLOCK if pmd is
- 	 * folded, and if so pagetable_pte_ctor() becomes nop.
- 	 */
-+	 
- 	if (shift == PAGE_SHIFT)
- 		BUG_ON(!pagetable_pte_ctor(ptdesc));
- 	else if (shift == PMD_SHIFT)
-@@ -536,17 +851,21 @@ void __init create_pgd_mapping(struct mm_struct *mm, phys_addr_t phys,
- static void update_mapping_prot(phys_addr_t phys, unsigned long virt,
- 				phys_addr_t size, pgprot_t prot)
- {
-+	unsigned long va = virt & PAGE_MASK;
-+    phys_addr_t   sz = ALIGN(size, PAGE_SIZE);
-+
- 	if (virt < PAGE_OFFSET) {
- 		pr_warn("BUG: not updating mapping for %pa at 0x%016lx - outside kernel range\n",
- 			&phys, virt);
--		return;
-+		return;;
+@@ -336,9 +369,6 @@ SECTIONS
+ 		*(.plt) *(.plt.*) *(.iplt) *(.igot .igot.plt)
  	}
- 
--	__create_pgd_mapping(init_mm.pgd, phys, virt, size, prot, NULL,
--			     NO_CONT_MAPPINGS);
-+	pr_debug("[SECV] update_mapping_prot: va=%px..%px pa=%pa size=0x%llx prot=0x%llx\n",
-+            (void*)va, (void*)(va + sz - 1), &phys, (u64)sz, (u64)pgprot_val(prot));
- 
--	/* flush the TLBs after updating live kernel mappings */
--	flush_tlb_kernel_range(virt, virt + size);
-+    __create_pgd_mapping(init_mm.pgd, phys, va, sz, prot, NULL, NO_CONT_MAPPINGS);
-+    flush_tlb_kernel_range(va, va + sz);
-+	
+ 	ASSERT(SIZEOF(.plt) == 0, "Unexpected run-time procedure linkages detected!")
+-
+-	.data.rel.ro : { *(.data.rel.ro) }
+-	ASSERT(SIZEOF(.data.rel.ro) == 0, "Unexpected RELRO detected!")
  }
  
- static void __init __map_memblock(pgd_t *pgdp, phys_addr_t start,
-@@ -805,14 +1124,34 @@ static void __init create_idmap(void)
- 	}
- }
- 
-+/* added for shadow mapping and permission setting */
- void __init paging_init(void)
- {
--	map_mem(swapper_pg_dir);
-+    phys_addr_t pa = __pa_symbol(__pt_pool_start);
-+    phys_addr_t size = (phys_addr_t)(__pt_pool_end - __pt_pool_start);
-+
-+	secv_layout_sanity_once();
-+    secv_shadowmap_sanity();
- 
--	memblock_allow_resize();
-+    if (size)
-+        memblock_mark_nomap(pa, size);
-+
-+    map_mem(swapper_pg_dir);
-+    memblock_allow_resize();
-+    create_idmap();
-+    declare_kernel_vmas();
-+
-+	
-+    if (size) {
-+		unsigned long va_linear = (unsigned long)lm_alias(__pt_pool_start);
-+        __create_pgd_mapping(swapper_pg_dir, pa, va_linear, size, pgprot_tagged(PAGE_KERNEL), __pgd_pgtable_alloc, NO_CONT_MAPPINGS);
-+        memblock_clear_nomap(pa, size);
-+		pr_debug("[SECV] ptpool linear RW: va=%px..%px  pa=%pa  size=0x%llx\n",
-+                (void *)va_linear, (void *)(va_linear + size - 1), &pa, (u64)size);
-+    }
-+				
-+    secv_map_pt_pool_inner_alias_rw(); 
- 
--	create_idmap();
--	declare_kernel_vmas();
- }
- 
- #ifdef CONFIG_MEMORY_HOTPLUG
-@@ -1593,4 +1932,4 @@ int arch_set_user_pkey_access(struct task_struct *tsk, int pkey, unsigned long i
- 
- 	return 0;
- }
+ #include "image-vars.h"
+@@ -385,4 +415,4 @@ ASSERT(__relocate_new_kernel_end - __relocate_new_kernel_start <= SZ_4K,
+ ASSERT(KEXEC_CONTROL_PAGE_SIZE >= SZ_4K, "KEXEC_CONTROL_PAGE_SIZE is broken")
+ ASSERT(__relocate_new_kernel_start == arm64_relocate_new_kernel,
+        "kexec control page does not start with arm64_relocate_new_kernel")
 -#endif
 +#endif
 \ No newline at end of file
+diff --git a/arch/arm64/kvm/fpsimd.c b/arch/arm64/kvm/fpsimd.c
+index 8c1d0d4853df..b01314919117 100644
+--- a/arch/arm64/kvm/fpsimd.c
++++ b/arch/arm64/kvm/fpsimd.c
+@@ -14,7 +14,7 @@
+ #include <asm/kvm_mmu.h>
+ #include <asm/sysreg.h>
+ 
+-void kvm_vcpu_unshare_task_fp(struct kvm_vcpu *vcpu)
++void __secv_tsk kvm_vcpu_unshare_task_fp(struct kvm_vcpu *vcpu)
+ {
+ 	struct task_struct *p = vcpu->arch.parent_task;
+ 	struct user_fpsimd_state *fpsimd;
+diff --git a/arch/arm64/mm/context.c b/arch/arm64/mm/context.c
+index 188197590fc9..f708ade5a719 100644
+--- a/arch/arm64/mm/context.c
++++ b/arch/arm64/mm/context.c
+@@ -17,6 +17,9 @@
+ #include <asm/smp.h>
+ #include <asm/tlbflush.h>
+ 
++#include <linux/secv/secv_idc.h>
++#include <linux/secv/secv_flag.h>
++
+ static u32 asid_bits;
+ static DEFINE_RAW_SPINLOCK(cpu_asid_lock);
+ 
+@@ -365,6 +368,12 @@ void cpu_do_switch_mm(phys_addr_t pgd_phys, struct mm_struct *mm)
+ 	ttbr1 |= FIELD_PREP(TTBR_ASID_MASK, asid);
+ 
+ 	cpu_set_reserved_ttbr0_nosync();
++
++	if(!secv_flag_test(SCALL_CPU_DO_SWITCH_MM)){
++		IDC(SCALL_CPU_DO_SWITCH_MM, (u64)pgd_phys, (u64)(uintptr_t)mm, 0, 0);
++		return;
++	}
++
+ 	write_sysreg(ttbr1, ttbr1_el1);
+ 	write_sysreg(ttbr0, ttbr0_el1);
+ 	isb();
+diff --git a/arch/arm64/mm/fault.c b/arch/arm64/mm/fault.c
+index 2e5d1e238af9..bcaea5b0bdd6 100644
+--- a/arch/arm64/mm/fault.c
++++ b/arch/arm64/mm/fault.c
+@@ -43,6 +43,9 @@
+ #include <asm/tlbflush.h>
+ #include <asm/traps.h>
+ 
++#include <linux/secv/secv_idc.h>
++#include <linux/secv/secv_flag.h>
++
+ struct fault_info {
+ 	int	(*fn)(unsigned long far, unsigned long esr,
+ 		      struct pt_regs *regs);
+@@ -216,6 +219,24 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
+ 	pteval_t old_pteval, pteval;
+ 	pte_t pte = READ_ONCE(*ptep);
+ 
++	if(!secv_flag_test(SCALL_PTEP_SET_ACCESS_FLAG)){
++			struct secv_petp_set_access_flags_args {
++    		struct vm_area_struct *vma;
++			unsigned long address;
++			pte_t *ptep;
++			pte_t entry;
++			int dirty; 
++		} a;
++
++			a.vma     = vma;
++			a.address = address;
++			a.ptep    = ptep;
++			a.entry = entry;
++			a.dirty = dirty;
++
++			IDC(SCALL_PTEP_SET_ACCESS_FLAG, (u64)(uintptr_t)&a, 0, 0, 0);
++		}
++		
+ 	if (pte_same(pte, entry))
+ 		return 0;
+ 
+@@ -230,6 +251,7 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
+ 	 */
+ 	pte_val(entry) ^= PTE_RDONLY;
+ 	pteval = pte_val(pte);
++
+ 	do {
+ 		old_pteval = pteval;
+ 		pteval ^= PTE_RDONLY;
+diff --git a/arch/arm64/mm/pgd.c b/arch/arm64/mm/pgd.c
+index 4a64089e5771..9621242c17bb 100644
+--- a/arch/arm64/mm/pgd.c
++++ b/arch/arm64/mm/pgd.c
+@@ -15,6 +15,9 @@
+ #include <asm/page.h>
+ #include <asm/tlbflush.h>
+ 
++#include <linux/secv/secv_idc.h>
++#include <linux/secv/secv_flag.h>
++
+ static struct kmem_cache *pgd_cache __ro_after_init;
+ 
+ pgd_t *pgd_alloc(struct mm_struct *mm)
+@@ -29,6 +32,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+ 
+ void pgd_free(struct mm_struct *mm, pgd_t *pgd)
+ {
++	if(!secv_flag_test(SCALL_PGD_FREE)){
++		IDC(SCALL_PGD_FREE, (u64)(uintptr_t)mm, (u64)(uintptr_t)pgd, 0, 0);
++		return;
++	}
++
+ 	if (PGD_SIZE == PAGE_SIZE)
+ 		free_page((unsigned long)pgd);
+ 	else
+diff --git a/arch/arm64/secv/Makefile b/arch/arm64/secv/Makefile
+new file mode 100644
+index 000000000000..5f1af06aa680
+--- /dev/null
++++ b/arch/arm64/secv/Makefile
+@@ -0,0 +1 @@
++obj-y += secv_init.o
+\ No newline at end of file
+diff --git a/arch/arm64/secv/secv_init.c b/arch/arm64/secv/secv_init.c
+new file mode 100644
+index 000000000000..a39e501e0702
+--- /dev/null
++++ b/arch/arm64/secv/secv_init.c
+@@ -0,0 +1,405 @@
++#include <asm/pgalloc.h>
++#include <linux/export.h>
++#include <linux/init.h>
++#include <linux/memblock.h>
++#include <linux/mm.h>
++#include <linux/set_memory.h>
++
++#include <linux/secv/secv_ing.h>
++#include <asm/pgtable.h>
++
++int secv_enabled = 0;
++int secv_pgtbl_enabled = 0;
++
++static void secv_protect_zone_ptp(void);
++static void secv_create_shadow_mapping(phys_addr_t, phys_addr_t);
++static void secv_shadow_populate_pgd(pgd_t *, unsigned long, unsigned long);
++static void secv_shadow_populate_p4d(p4d_t *, unsigned long, unsigned long);
++static void secv_shadow_populate_pud(pud_t *, unsigned long, unsigned long);
++static void set_secv_page_user_bits(unsigned long va);
++static void page_set_user_bit(unsigned long va);
++static void secv_init_iret_stack(void);
++static void secv_init_inner_stack(void);
++static void secv_mirror_outer_l1_top128(void);
++
++unsigned long ptp_start_pfn;
++unsigned long ptp_end_pfn;
++
++DEFINE_PER_CPU_PAGE_ALIGNED(struct inner_stack, inner_stacks);
++DEFINE_PER_CPU_PAGE_ALIGNED(struct iret_stack, iret_stacks);
++DEFINE_PER_CPU(unsigned long, secv_temp);
++
++unsigned long shadow_offset_base __ro_after_init = _AC(0xffffffa000000000, UL);
++
++/* Create shadow mapping */
++int __init secv_init(void)
++{
++    u64 i;
++	unsigned long start_pfn, end_pfn;
++	phys_addr_t start, end;
++
++    /* initialize pgt_buf */
++    secv_early_alloc_pgt_buf();
++
++    for_each_mem_range(i, &start, &end){
++        start_pfn = start >> PAGE_SHIFT;
++        end_pfn   = end   >> PAGE_SHIFT;
++    
++		pr_info("[SECV] mapping shadow [mem %#010lx-%#010lx]\n",
++                (unsigned long long)start, (unsigned long long)end);
++
++		secv_create_shadow_mapping(start, end);
++	}
++
++	secv_init_inner_stack();
++
++	secv_pgtbl_enabled = 1;
++
++	return 0;
++}
++
++int secv_finalize(void)
++{
++	secv_init_iret_stack();
++
++	set_secv_page_user_bits((unsigned long)__inner_text_start);
++
++	secv_enabled = 1;
++
++	pr_info("[SECV] Nested Kernel Protection Enabled!\n");
++
++	return 0;
++}
++
++static void secv_set_user_bit_for_va(unsigned long va)
++{
++	pgd_t *pgd;
++	p4d_t *p4d;
++	pud_t *pud;
++	pmd_t *pmd;
++	pte_t *ptep;
++	pte_t  pte;
++
++	pgd = pgd_offset_k(va);
++	if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd)))
++		return;
++
++	p4d = p4d_offset(pgd, va);
++	if (p4d_none(*p4d) || unlikely(p4d_bad(*p4d)))
++		return;
++
++	pud = pud_offset(p4d, va);
++	if (pud_none(*pud) || unlikely(pud_bad(*pud)))
++		return;
++
++	/* case 1: PUD-level block (1GB) mapping */
++	if (pud_sect(READ_ONCE(*pud))) {
++		pud_t old = READ_ONCE(*pud);
++		pud_t new = __pud(pud_val(old) | PTE_USER);
++
++		set_pud(pud, new);
++		return;
++	}
++
++	pmd = pmd_offset(pud, va);
++	if (pmd_none(READ_ONCE(*pmd)) || unlikely(pmd_bad(READ_ONCE(*pmd))))
++		return;
++
++	/* case 2: PMD-level block (2MB) mapping */
++	if (pmd_sect(READ_ONCE(*pmd))) {
++		pmd_t old = READ_ONCE(*pmd);
++		pmd_t new = __pmd(pmd_val(old) | PTE_USER);
++
++		set_pmd(pmd, new);
++		return;
++	}
++
++	/* case 3: normal 4K PTE mapping */
++	ptep = pte_offset_kernel(pmd, va);
++	pte  = READ_ONCE(*ptep);
++	if (pte_none(pte))
++		return;
++
++	pte  = __pte(pte_val(pte) | PTE_USER);
++	set_pte_at(&init_mm, va, ptep, pte);
++}
++
++//if want to use the lock -> static DEFINE_SPINLOCK(pgd_lock);
++static void __used __init secv_create_shadow_mapping(phys_addr_t start_paddr, phys_addr_t end_paddr)
++{
++	unsigned long start = __phys_to_shadow(start_paddr);
++	unsigned long end = __phys_to_shadow(end_paddr);
++	unsigned long pgd_next;
++
++	pgd_t *pgd = pgd_offset_k(start);
++	//spin_lock(&pgd_lock);
++	do {
++		pgd_next = pgd_addr_end(start, end);
++		secv_shadow_populate_pgd(pgd, start, pgd_next);
++		pr_info("[SECV] secv_shadow_populate_pgd"
++			"(%#010lx, %#010lx)\n", start, pgd_next);
++	} while (pgd++, start = pgd_next, start != end);
++	//spin_unlock(&pgd_lock);
++}
++
++static void __init secv_shadow_populate_pgd(pgd_t *pgd, unsigned long addr,
++					  unsigned long end)
++{
++	void *p;
++	p4d_t *p4d;
++	unsigned long p4d_next;
++
++	if (pgd_none(*pgd)) {
++		p = secv_alloc_low_pages(1);
++		pgd_populate(&init_mm, pgd, p);
++	}
++
++	p4d = p4d_offset(pgd, addr);
++	do {
++		p4d_next = p4d_addr_end(addr, end);
++		pr_info("[SECV] secv_shadow_populate_p4d"
++			"(%#010lx, %#010lx)\n", addr, p4d_next);
++		secv_shadow_populate_p4d(p4d, addr, p4d_next);
++	} while (p4d++, addr = p4d_next, addr != end);
++}
++
++static void __init secv_shadow_populate_p4d(p4d_t *p4d, unsigned long addr,
++					  unsigned long end)
++{
++	void *p;
++	pud_t *pud;
++	unsigned long pud_next;
++
++	if (p4d_none(*p4d)) {
++		p = secv_alloc_low_pages(1);
++		p4d_populate(&init_mm, p4d, p);
++	}
++
++	pud = pud_offset(p4d, addr);
++	do {
++		pud_next = pud_addr_end(addr, end);
++		pr_info("[SECV] secv_shadow_populate_pud"
++			"(%#010lx, %#010lx)\n", addr, pud_next);
++		secv_shadow_populate_pud(pud, addr, pud_next);
++	} while (pud++, addr = pud_next, addr != end);
++}
++
++static void __init secv_shadow_populate_pud(pud_t *pud, unsigned long addr,
++					  unsigned long end)
++{
++	void *p;
++	pmd_t *pmd;
++	unsigned long pmd_next;
++	phys_addr_t phys;
++	pgprot_t pgprot_shadow_pmd;
++
++	addr = ALIGN_DOWN(addr, PMD_SIZE);
++	phys = __shadow_to_phys(addr);
++
++	pgprot_shadow_pmd = PAGE_KERNEL;
++
++	if (pud_none(*pud)) {
++		p = secv_alloc_low_pages(1); 
++		pud_populate(&init_mm, pud, p);
++	}
++
++	pmd = pmd_offset(pud, addr);
++	do {
++		pmd_next = pmd_addr_end(addr, end);
++        set_pmd(pmd, pfn_pmd(__phys_to_pfn(phys), pgprot_shadow_pmd));
++		phys += pmd_next - addr;
++	} while(pmd++, addr = pmd_next, addr != end);
++    pr_info("[SECV] finished secv_shadow_populate_pud\n");
++}
++
++
++#define SECV_INIT_PGTBL_LIST 4096
++struct secv_init_pgtbl_item {
++	void *addr;
++	int order;
++};
++
++static struct secv_init_pgtbl_item __initdata
++secv_init_pgtbl_list[SECV_INIT_PGTBL_LIST] = {};
++unsigned int secv_init_pgtbl_list_head = 0;
++
++
++unsigned long __initdata secv_pgt_buf_start;
++unsigned long __initdata secv_pgt_buf_end;
++unsigned long __initdata secv_pgt_buf_top;
++
++extern unsigned long max_pfn;
++
++/* To enable secv_alloc_low_pages, we have to initialize its data structures.
++ * init_mem_mapping() (in arch/x86/mm/init.c) function will create
++ * initial page tables at first by using secv_alloc_low_pages().
++ * Thus, we intercept this function and inserts the initialization function,
++ * i.e., secv_early_alloc_pgt_buf().
++ */
++/* FIXME: secv_early_alloc_pgt_buf() should be inserted after
++ * exexcuting e820__memblock_setup().
++ */
++void __init secv_early_alloc_pgt_buf(void)
++{
++	unsigned long start_pfn, end_pfn;
++	unsigned long reserved_size;
++	unsigned long phys;
++
++	/* Reserve the early ZONE_PTP */
++    phys = memblock_phys_alloc(SECV_INIT_PGTBL_COUNT * PAGE_SIZE, PAGE_SIZE);
++
++	if (!phys)
++		panic("[SECV] cannot reserve early pgt_buf memory");
++
++    secv_pgt_buf_start = phys >> PAGE_SHIFT;
++	secv_pgt_buf_end   = secv_pgt_buf_start;
++	secv_pgt_buf_top   = secv_pgt_buf_start + SECV_INIT_PGTBL_COUNT;
++
++	/* Reserve the after_bootmem ZONE_PTP */
++    end_pfn = max_pfn - SECV_INIT_PGTBL_COUNT;
++	start_pfn = max_pfn - ZONE_PTP_PFN;
++	reserved_size = (end_pfn - start_pfn) * PAGE_SIZE;
++
++	if (reserved_size > 0) {
++        memblock_reserve(start_pfn << PAGE_SHIFT, reserved_size);
++        pr_info("[SECV] reserve ZONE_PTP: [%lx - %lx) bytes=%lx\n",
++                start_pfn << PAGE_SHIFT,
++                end_pfn   << PAGE_SHIFT,
++                reserved_size);
++    } else {
++        pr_warn("[SECV] ZONE_PTP size <= 0, skipping reserve\n");
++    }
++}
++
++void __init secv_protect_pgtbl_init(void *addr, int order, enum secv_pgtbl_level lvl)
++{
++	if (unlikely(secv_init_pgtbl_list_head >= SECV_INIT_PGTBL_LIST)) {
++		pr_err("[SECV] init list size is too small: %ld\n",
++		       secv_init_pgtbl_list_head++);
++		return;
++	}
++
++#ifdef DEBUG_PGTBL
++	pr_info("secv_protect_pgtbl_init(%lx, %lx) [%s]\n", addr, order,
++		pgtbl_type_names[lvl]);
++#endif
++
++	secv_init_pgtbl_list[secv_init_pgtbl_list_head].addr = addr;
++	secv_init_pgtbl_list[secv_init_pgtbl_list_head].order = order;
++	secv_init_pgtbl_list_head++;
++}
++
++__ref void* secv_alloc_low_pages(unsigned int num)
++{
++	unsigned long pfn;
++	void *pgtbl;
++	int i;
++
++    /* at the first, skip this (at this moment, 'secv_pgtbl_enabled' = 0) */
++	if (secv_pgtbl_enabled) { 
++		pgtbl = (void *)__get_free_pages(GFP_PGTABLE_KERNEL, 0);
++		goto done;
++	}
++
++    /* if secv_pgt_buf overflows, */
++	if ((secv_pgt_buf_end + num) > secv_pgt_buf_top) {
++		panic("secv_allow_low_pages: cannot alloc memory");
++	}
++
++	pfn = secv_pgt_buf_end;
++	secv_pgt_buf_end += num;
++
++	for (i = 0; i < num; i++) {
++		void *adr;
++		adr = __va((pfn + i) << PAGE_SHIFT);
++		clear_page(adr);
++	}
++
++	pgtbl = __va(pfn << PAGE_SHIFT);
++
++done:
++	if(unlikely(secv_pgtbl_enabled))
++		panic("secv_alloc_low_pages: cannot run after secv enabled");
++
++	secv_protect_pgtbl_init(pgtbl, 0, SECV_PTP_NONE);
++	return pgtbl;
++}
++
++void *secv_spp_getpage(void)
++{
++	return secv_alloc_low_pages(1);
++}
++
++void set_shadow_stack_user_bits(unsigned long va)
++{
++    secv_set_user_bit_for_va(va);
++}
++
++void set_secv_page_user_bits(unsigned long va)
++{
++    secv_set_user_bit_for_va(va);
++}
++
++void page_set_user_bit(unsigned long va)
++{
++    secv_set_user_bit_for_va(va);
++}
++
++static void secv_init_iret_stack(void)
++{
++	int cpu;
++	struct iret_stack *iret_stack;
++
++	local_irq_disable();
++	for_each_possible_cpu(cpu) {
++		iret_stack = per_cpu_ptr(&iret_stacks, cpu);
++		iret_stack->stack_bottom = (unsigned long)&iret_stack->stack;
++		iret_stack->stack_bottom_shdw =
++			__virt_to_shadow(&iret_stack->stack);
++		pr_info("secv: iret_stack->stack_bottom #%d: %lx\n",
++			cpu, iret_stack->stack_bottom);
++		pr_info("secv: iret_stack->stack_bottom_shdw #%d: %lx\n",
++			cpu, iret_stack->stack_bottom_shdw);
++
++	}
++	local_irq_enable();
++
++	for_each_possible_cpu(cpu) {
++		int num_pages;
++
++		iret_stack = per_cpu_ptr(&iret_stacks, cpu);
++		num_pages = PAGE_ALIGN(sizeof(iret_stacks)) >> PAGE_SHIFT;
++
++		pr_info("IRET_STACK #%d: %lx (pages: %d)\n",
++			cpu, iret_stack, num_pages);
++
++		//set_memory_4k((unsigned long)iret_stack, num_pages);
++		set_memory_ro((unsigned long)iret_stack, num_pages);
++
++		page_set_user_bit((unsigned long)iret_stack);
++	}
++}
++
++static __init void secv_init_inner_stack(void)
++{
++	int cpu;
++	struct inner_stack *inner_stack;
++
++	for_each_possible_cpu(cpu) {
++		int num_pages;
++
++		inner_stack = per_cpu_ptr(&inner_stacks, cpu);
++		num_pages = PAGE_ALIGN(sizeof(*inner_stack)) >> PAGE_SHIFT;
++
++		pr_info("INNER_STACK #%d: %lx ~ %lx (pages: %d)\n",
++			cpu, &inner_stack->stack,
++			(void *)&inner_stack->stack + PAGE_SIZE,
++			num_pages);
++
++		//set_memory_4k((unsigned long)inner_stack, num_pages);
++
++#if (0) // FIXME
++		page_set_user_bit((unsigned long)inner_stack);
++#endif
++	}
++}
+\ No newline at end of file
+diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
+index fb2c8d14327a..63981586a125 100644
+--- a/fs/binfmt_elf.c
++++ b/fs/binfmt_elf.c
+@@ -50,6 +50,9 @@
+ #include <asm/param.h>
+ #include <asm/page.h>
+ 
++#include <linux/secv/secv_idc.h>
++#include <linux/secv/secv_flag.h>
++
+ #ifndef ELF_COMPAT
+ #define ELF_COMPAT 0
+ #endif
+@@ -844,6 +847,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 	struct pt_regs *regs;
+ 
+ 	retval = -ENOEXEC;
++ 
+ 	/* First of all, some simple consistency checks */
+ 	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
+ 		goto out;
+@@ -900,7 +904,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 		retval = PTR_ERR(interpreter);
+ 		if (IS_ERR(interpreter))
+ 			goto out_free_ph;
+-
++		
+ 		/*
+ 		 * If the binary is not readable then enforce mm->dumpable = 0
+ 		 * regardless of the interpreter's permissions.
+@@ -1346,6 +1350,11 @@ static int load_elf_binary(struct linux_binprm *bprm)
+ 
+ 	finalize_exec(bprm);
+ 	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
++
++	if(!secv_flag_test(SCALL_LOAD_ELF_BINARY)){
++		IDC(SCALL_LOAD_ELF_BINARY, (u64)(uintptr_t)bprm, (u64)(uintptr_t)&retval, 0, 0);
++		return retval;
++	}
+ 	retval = 0;
+ out:
+ 	return retval;
+diff --git a/fs/compat_binfmt_elf.c b/fs/compat_binfmt_elf.c
+index 8f0af4f62631..90bb5917ad5e 100644
+--- a/fs/compat_binfmt_elf.c
++++ b/fs/compat_binfmt_elf.c
+@@ -142,3 +142,8 @@
+  * We share all the actual code with the native (64-bit) version.
+  */
+ #include "binfmt_elf.c"
++
++int secv_load_elf_binary(struct linux_binprm *bprm){
++	return load_elf_binary(bprm);
++}
++EXPORT_SYMBOL(secv_load_elf_binary);
+\ No newline at end of file
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 8982820dae213..79ad137d3dffb 100644
+index 77f01ac385f7..4a2b1a33ea0e 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -790,6 +790,8 @@ struct task_struct {
+@@ -38,6 +38,7 @@
+ #include <linux/rv.h>
+ #include <linux/livepatch_sched.h>
+ #include <asm/kmap_size.h>
++#include <linux/secv/secv_idc.h>
+ 
+ /* task_struct member predeclarations (sorted alphabetically): */
+ struct audit_context;
+@@ -748,6 +749,8 @@ struct task_struct {
  	 */
  	struct thread_info		thread_info;
  #endif
@@ -941,289 +1222,177 @@ index 8982820dae213..79ad137d3dffb 100644
 +	unsigned int  secv_alias_npages;   /* for alias npages */
  	unsigned int			__state;
  
- 	/* saved state for "spinlock sleepers" */
-diff --git a/include/linux/secv_taskalias.h b/include/linux/secv_taskalias.h
+ #ifdef CONFIG_PREEMPT_RT
+@@ -1551,6 +1554,10 @@ struct task_struct {
+ 	 *
+ 	 * Do not put anything below here!
+ 	 */
++	/**
++	 * SECV: can_buffer_rec, TODO: move this to some special page in the inner kernel
++	 */
++	void *can_buffer_rec;
+ };
+ 
+ static inline struct pid *task_pid(struct task_struct *task)
+diff --git a/include/linux/secv/secv_idc.h b/include/linux/secv/secv_idc.h
 new file mode 100644
-index 0000000000000..3e44e97ba1602
+index 000000000000..764c778d0972
 --- /dev/null
-+++ b/include/linux/secv_taskalias.h
-@@ -0,0 +1,11 @@
-+#pragma once
++++ b/include/linux/secv/secv_idc.h
+@@ -0,0 +1,110 @@
++#ifndef _SECV_IDC_H_
++#define _SECV_IDC_H_
++
++#if !defined(__ASSEMBLY__) && !defined(__VDSO__)
++
++#include <linux/percpu.h>
++#include <linux/bitops.h>
++#include <linux/preempt.h>
++#include <linux/irqflags.h>
 +#include <linux/types.h>
 +
-+struct task_struct;
++#include <linux/init.h>
++#include <linux/gfp.h>
++#include <linux/hashtable.h>
 +
-+void  *secv_tskalias_base(void);   
-+size_t secv_tskalias_size(void);
++#define SCALL_SET_PTE    0xCA0ULL
++#define SCALL_SET_PMD    0xCA1ULL
++#define SCALL_SET_PUD    0xCA2ULL
++#define SCALL_PTEP_GET_CLEAR 0xCA3ULL
++#define SCALL_PTEP_SET_WRPROTECT 0xCA4ULL
++#define SCALL_PMDP_ESTABLISH 0xCA5ULL
++#define SCALL_CPU_DO_SWITCH_MM    0xCA6ULL
++#define SCALL_PTEP_SET_ACCESS_FLAG    0xCA7ULL
++#define SCALL_PGD_FREE    0xCA8ULL 
++#define SCALL_LOAD_ELF_BINARY    0xCA9ULL 
 +
-+int  secv_taskalias_map_task(struct task_struct *p);
-+void secv_taskalias_unmap_task(struct task_struct *p);
-diff --git a/kernel/fork.c b/kernel/fork.c
-index 8434ff53ab23d..e96708663abd7 100644
---- a/kernel/fork.c
-+++ b/kernel/fork.c
-@@ -119,6 +119,8 @@
- #include <trace/events/task.h>
- 
- #include <kunit/visibility.h>
-+#include <linux/secv_taskalias.h>
++#define SCALL_LSM_BPRM 0xCC0ULL
++#define SCALL_LSM_OPEN 0xCC1ULL
++#define SCALL_LSM_MMAP 0xCC2ULL
++#define SCALL_LSM_TASK_ALLOC 0xCC3ULL
++#define SCALL_LSM_MPROTECT 0xCC4ULL
++#define SCALL_LSM_PERMISSION 0xCC5ULL
 +
- 
- /*
-  * Minimum number of threads to boot the kernel
-@@ -176,14 +178,29 @@ void __weak arch_release_task_struct(struct task_struct *tsk)
- 
- static struct kmem_cache *task_struct_cachep;
- 
--static inline struct task_struct *alloc_task_struct_node(int node)
-+/* shadow mapping for task_struct*/
-+static inline void free_task_struct(struct task_struct *tsk)
- {
--	return kmem_cache_alloc_node(task_struct_cachep, GFP_KERNEL, node);
-+	#ifdef CONFIG_SECV_TSK_REGION
-+    secv_taskalias_unmap_task(tsk);
-+	#endif
++extern u64 IDC(u64 cmd, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
 +
-+    kmem_cache_free(task_struct_cachep, tsk);
- }
- 
--static inline void free_task_struct(struct task_struct *tsk)
-+/* shadow mapping for task_struct*/
-+static inline struct task_struct *alloc_task_struct_node(int node)
- {
--	kmem_cache_free(task_struct_cachep, tsk);
-+	#ifdef CONFIG_SECV_TSK_REGION
-+    struct task_struct *tsk;
-+	#endif
-+    tsk = kmem_cache_alloc_node(task_struct_cachep, GFP_KERNEL, node);
-+	#ifdef CONFIG_SECV_TSK_REGION
-+	WRITE_ONCE(tsk->secv_alias_off, 0UL); 
-+    if (tsk)
-+        secv_taskalias_map_task(tsk);  
-+	#endif
-+    return tsk;
- }
- 
- /*
-diff --git a/kernel/secv_taskalias.c b/kernel/secv_taskalias.c
-new file mode 100644
-index 0000000000000..a015c6e3dfee6
---- /dev/null
-+++ b/kernel/secv_taskalias.c
-@@ -0,0 +1,183 @@
 +/*
-+ * kernel/secv_taskalias.c
-+ *  - Map each task_struct's backing pages into a pre-reserved VA window
-+ *    exposed by mmu.c (secv_tskalias_base/size)
++ * Shadow Mapping
 + */
-+#include <linux/mm.h>
-+#include <linux/slab.h>
-+#include <linux/vmalloc.h>   
-+#include <linux/sched.h>
-+#include <linux/xarray.h>  
-+#include <asm/tlbflush.h>
-+#include <asm/cacheflush.h>
-+#include <asm/page.h>
-+#include <linux/secv_taskalias.h>
++extern unsigned long shadow_offset_base;
++#define SECV_SHADOW_OFFSET shadow_offset_base
 +
-+#ifdef CONFIG_SECV_TSK_REGION
++extern int secv_enabled;
++extern int secv_pgtbl_enabled;
 +
-+static inline int map_kernel_range_compat(unsigned long start, unsigned long size, pgprot_t prot, struct page **pages)
-+{
-+    unsigned long addr = start;
-+    unsigned long end  = start + size;
++#define __phys_to_shadow(x) ((unsigned long)(x) + SECV_SHADOW_OFFSET) 
++#define __virt_to_shadow(x) ((unsigned long)(x) - PAGE_OFFSET + SECV_SHADOW_OFFSET) 
 +
-+    while (addr < end) {
-+        phys_addr_t phys_start = page_to_phys(*pages);
-+        unsigned long run_pages = 1;
++#define __shadow_to_virt(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET + PAGE_OFFSET)
++#define __shadow_to_phys(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET)
 +
-+        while (addr + (run_pages << PAGE_SHIFT) < end) {
-+            struct page *cur  = pages[run_pages - 1];
-+            struct page *next = pages[run_pages];
-+            phys_addr_t cur_phys  = page_to_phys(cur);
-+            phys_addr_t next_phys = page_to_phys(next);
-+            if (next_phys != cur_phys + PAGE_SIZE)
-+                break;
-+            run_pages++;
-+        }
++#define __inner __section(.text.inner)
 +
-+        /* mapping */
-+        {
-+            unsigned long run_end = addr + (run_pages << PAGE_SHIFT);
-+            int ret = vmap_page_range(addr, run_end, phys_start, prot);
-+            if (ret) {
-+                if (addr > start)
-+                    vunmap_range(start, addr);
-+                return ret;
-+            }
-+            addr  = run_end;
-+            pages += run_pages;
-+        }
-+    }
++extern char __task_text_start[], __task_text_end[];
++#define __secv_tsk  __section(.text.task)
 +
-+    flush_cache_vmap(start, end);
-+    flush_tlb_kernel_range(start, end);
-+    return 0;
-+}
++extern unsigned long ptp_start_pfn;
++extern unsigned long ptp_end_pfn;
++#define ZONE_PTP_PFN 0x40000 
++
++extern char __inner_text_start[], __inner_text_end[];
++
++/*
++ * INNER KERNEL STACK
++ */
++#define SECV_INNER_STKSZ PAGE_SIZE
++#define SECV_INNER_STK_PGSZ (SECV_INNER_STKSZ / PAGE_SIZE)
++
++struct inner_stack {
++	unsigned char stack[SECV_INNER_STKSZ];
++} __attribute__((aligned(PAGE_SIZE)));
++
++DECLARE_PER_CPU_PAGE_ALIGNED(struct inner_stack, inner_stacks);
 +
 +
-+static inline void unmap_kernel_range_compat(unsigned long start, unsigned long size)
-+{
-+    vunmap_range(start, start + size);
-+}
++struct iret_stack {
++	unsigned long stack_bottom;
++	unsigned long stack_bottom_shdw;
++	unsigned long stack[5];
++} __attribute__((aligned(PAGE_SIZE)));
 +
-+#define map_kernel_range   map_kernel_range_compat
-+#define unmap_kernel_range unmap_kernel_range_compat
++DECLARE_PER_CPU_PAGE_ALIGNED(struct iret_stack, iret_stacks);
 +
++DECLARE_PER_CPU(unsigned long, secv_temp);
 +
-+static DEFINE_SPINLOCK(secv_slot_lock);      /* reserved region offset */
-+static unsigned long secv_next_off;          
++/* INIT PAGE TABLES */
++#define SECV_INIT_PGTBL_COUNT 4096
 +
-+
-+static int build_task_pages(struct task_struct *p, struct page ***pages_out, unsigned long *npages_out, unsigned long *bytes_out)
-+{
-+	unsigned long base  = (unsigned long)p;
-+	size_t        bytes = sizeof(struct task_struct);
-+	unsigned long first = base & PAGE_MASK;
-+	unsigned long last  = ALIGN(base + bytes, PAGE_SIZE); 
-+	unsigned long npages = (last - first) >> PAGE_SHIFT; /* total # of pages */ 
-+	struct page **pages;
-+	unsigned long i;
-+
-+	if (!npages) npages = 1; /* if smaller than one page */
-+
-+	pages = kcalloc(npages, sizeof(*pages), GFP_KERNEL);
-+	/* arrary for storing pages */
-+	if (!pages)
-+		return -ENOMEM;
-+
-+	for (i = 0; i < npages; i++)
-+		pages[i] = virt_to_page((void *)(first + (i << PAGE_SHIFT)));
-+	/* pages = [ page_for(first), page_for(first+PAGE_SIZE), page_for(first+2*PAGE_SIZE), ... ] */
-+
-+	*pages_out  = pages;
-+	*npages_out = npages;
-+	*bytes_out  = npages << PAGE_SHIFT;
-+	return 0;
-+}
-+
-+static int secv_alloc_slot(unsigned long bytes, unsigned long *off_out)
-+{
-+	unsigned long flags, base_sz, next;
-+	base_sz = secv_tskalias_size();
-+
-+	if (!secv_tskalias_base() || !base_sz)
-+		return -ENODEV;
-+
-+	spin_lock_irqsave(&secv_slot_lock, flags);
-+
-+	next = ALIGN(secv_next_off, PAGE_SIZE);
-+
-+	if (bytes > base_sz || next > base_sz - bytes) {
-+		spin_unlock_irqrestore(&secv_slot_lock, flags);
-+		return -ENOSPC;
-+	}
-+
-+	*off_out = next;
-+
-+	secv_next_off = next + bytes;
-+
-+	spin_unlock_irqrestore(&secv_slot_lock, flags);
-+	return 0;
-+}
++enum secv_pgtbl_level {
++	SECV_PTP_NONE,
++	SECV_PTP_PGD,
++	SECV_PTP_P4D,
++	SECV_PTP_PUD,
++	SECV_PTP_PMD,
++	SECV_PTP_UPTE,
++	SECV_PTP_KPTE,
++	SECV_PTP_NUM
++};
 +
 +
-+int secv_taskalias_map_task(struct task_struct *p)
-+{
-+	struct page **pages = NULL;
-+	unsigned long npages, bytes, off, start;
-+	int ret;
++int __init secv_init(void);
++int secv_finalize(void);
 +
-+	ret = build_task_pages(p, &pages, &npages, &bytes);
-+	if (ret)
-+		return ret;
++void secv_early_alloc_pgt_buf(void);
++void *secv_alloc_low_pages(unsigned int);
 +
-+	ret = secv_alloc_slot(bytes, &off);
-+	if (ret) {
-+		kfree(pages);
-+		return ret;
-+	}
++unsigned long
++__secv_entry(unsigned long, unsigned long, unsigned long, unsigned long);
 +
-+	start = (unsigned long)secv_tskalias_base() + off;
-+
-+	ret = map_kernel_range(start, bytes, PAGE_KERNEL, pages);
-+	if (ret) {
-+		kfree(pages);
-+		return ret;
-+	}
-+
-+	/* secv_alias_off, secv_alias_npages are new field for task_strcut */
-+	WRITE_ONCE(p->secv_alias_off, off);
-+	WRITE_ONCE(p->secv_alias_npages, (unsigned int)npages);
-+
-+	kfree(pages);
-+	return 0;
-+
-+}
-+EXPORT_SYMBOL_GPL(secv_taskalias_map_task);
-+
-+
-+void secv_taskalias_unmap_task(struct task_struct *p)
-+{
-+    unsigned long off, npages, start, size, base;
-+
-+    if (!p) return;
-+
-+    off    = READ_ONCE(p->secv_alias_off);
-+    npages = READ_ONCE(p->secv_alias_npages);
-+    if (!off || !npages)          
-+        return;
-+
-+    base  = (unsigned long)secv_tskalias_base();
-+    start = base + off;
-+    size  = npages << PAGE_SHIFT;
-+
-+    if (start < base || start + size > base + secv_tskalias_size())
-+        return; 
-+
-+    unmap_kernel_range(start, size);
-+
-+    WRITE_ONCE(p->secv_alias_off,    0UL);
-+    WRITE_ONCE(p->secv_alias_npages, 0U);
-+}
-+
-+
-+#endif /* CONFIG_SECV_TSK_REGION */
-diff --git a/mm/memory.c b/mm/memory.c
-index d322ddfe67916..26122616f2562 100644
---- a/mm/memory.c
-+++ b/mm/memory.c
-@@ -92,6 +92,9 @@
- #include "internal.h"
- #include "swap.h"
++#endif 
++#endif 
+diff --git a/init/main.c b/init/main.c
+index c787e94cc898..b823c7ad7f53 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -101,6 +101,7 @@
+ #include <linux/stackdepot.h>
+ #include <linux/randomize_kstack.h>
+ #include <net/net_namespace.h>
++#include <linux/secv/secv_idc.h>
  
-+/* for operation delegation */
-+#include "../arch/arm64/kernel/secv/secv_hooks.h"
+ #include <asm/io.h>
+ #include <asm/setup.h>
+@@ -1066,6 +1067,8 @@ void start_kernel(void)
+ 	taskstats_init_early();
+ 	delayacct_init();
+ 
++	secv_init();
 +
- #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
- #warning Unfortunate NUMA and NUMA Balancing config, growing page-frame for last_cpupid.
- #endif
-@@ -5398,6 +5401,12 @@ static vm_fault_t do_shared_fault(struct vm_fault *vmf)
-  * If mmap_lock is released, vma may become invalid (for example
-  * by other thread calling munmap()).
-  */
+ 	acpi_subsystem_init();
+ 	arch_post_acpi_subsys_init();
+ 	kcsan_init();
+@@ -1452,6 +1455,8 @@ static int __ref kernel_init(void *unused)
+ 	free_initmem();
+ 	mark_readonly();
+ 
++	secv_finalize();
 +
-+vm_fault_t secv_do_read_fault_bridge(struct vm_fault *vmf) { return do_read_fault(vmf); }
-+vm_fault_t secv_do_cow_fault_bridge(struct vm_fault *vmf) { return do_cow_fault(vmf); }
-+vm_fault_t secv_do_shared_fault_bridge(struct vm_fault *vmf) { return do_shared_fault(vmf); }
-+
-+
- static vm_fault_t do_fault(struct vm_fault *vmf)
- {
- 	struct vm_area_struct *vma = vmf->vma;
+ 	/*
+ 	 * Kernel mappings are now finalized - update the userspace page-table
+ 	 * to finalize PTI.
+diff --git a/security/Makefile b/security/Makefile
+index 18121f8f85cd..390e66ec040b 100644
+--- a/security/Makefile
++++ b/security/Makefile
+@@ -27,3 +27,4 @@ obj-$(CONFIG_SECURITY_LANDLOCK)		+= landlock/
+ 
+ # Object integrity file lists
+ obj-$(CONFIG_INTEGRITY)			+= integrity/
++obj-$(CONFIG_SECURITY_SECV) += secv_lsm.o
+\ No newline at end of file
 diff --git a/security/secv_lsm.c b/security/secv_lsm.c
 new file mode 100644
-index 0000000000000..d2a5912e897c8
+index 000000000000..f5d9b7048bcf
 --- /dev/null
 +++ b/security/secv_lsm.c
 @@ -0,0 +1,365 @@
@@ -1253,7 +1422,7 @@ index 0000000000000..d2a5912e897c8
 +struct bpf_token;
 +#endif
 +
-+#include "../arch/arm64/kernel/secv/secv_idc.h"  
++#include <linux/secv/secv_idc.h> 
 +#include "secv_lsm.h" 
 +
 +/* ensure per cpu action */
@@ -1594,10 +1763,10 @@ index 0000000000000..d2a5912e897c8
 +};
 diff --git a/security/secv_lsm.h b/security/secv_lsm.h
 new file mode 100644
-index 0000000000000..2b2c587b9f7cc
+index 000000000000..fe9c603cea5b
 --- /dev/null
 +++ b/security/secv_lsm.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,25 @@
 +/* security/secv_lsm.h */
 +#ifndef _SECV_LSM_H_
 +#define _SECV_LSM_H_
@@ -1613,15 +1782,99 @@ index 0000000000000..2b2c587b9f7cc
 +#include <linux/percpu.h>
 +#include <linux/security.h>
 +#include <linux/lsm_hooks.h>
-+#include <linux/lsm.h>
 +#include <linux/printk.h>
 +#include <linux/compiler.h>    
 +
-+#include "../arch/arm64/kernel/secv/secv_idc.h"   
++#include <linux/secv/secv_idc.h>
 +
 +u64 IDC(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
 +
 +u64 secv_call_idc(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
 +
 +#endif
+\ No newline at end of file
+diff --git a/arch/arm64/kernel/secv/secv_idc.S b/arch/arm64/kernel/secv/secv_idc.S
+new file mode 100644
+index 0000000000000..bdae1322ffa59
+--- /dev/null
++++ b/arch/arm64/kernel/secv/secv_idc.S
+@@ -0,0 +1,78 @@
++/**
++ * Inner Domain Call (IDC)
++ *
++ * @param cmd a command -> ex: what action does inner domain handler take?
++ * @param [arg0-arg3] four parameters -> arguments for cmd => ex: cmd(arg0 = x0, arg0 = x1, arg1 = x2, arg2 = x3, arg3 = x4)
++ */
++
++.global IDC
++.extern inner_domain_handler
++.extern inner_domain_stack
++
++IDC:
++    /* The entry gate */
++    mrs x5, DAIF 
++    stp x30, x5, [sp, #-16]!            
++    msr DAIFset, 0x3
++
++1:
++    /* Set TCR.T1SZ to 25*/
++
++    mrs x5, tcr_el1 
++    and x5, x5, #0xfffffffffffdffff
++    orr x5, x5, #0x400000
++    msr tcr_el1, x5
++    isb 
++
++    /* Check the TCR value */
++    mov x6, #0xc03f
++    mov x7, #0x1b 
++    movk x6, #0xc07f, lsl #16
++    movk x7, #0x8059, lsl #16 
++    and x5, x5, x6 
++    cmp x5, x7 
++    b.ne 1b
++
++    /* per-CPU inner stack */
++    mrs x6, mpidr_el1 
++    ubfx x5, x6, #8, #4
++    and x6, x6, #0xf
++    orr x6, x6, x5, lsl #2
++    add x6, x6, #1 
++
++    /* switch to the inner domain stack */
++    adrp x5, inner_domain_stack 
++    add x5, x5, :lo12:inner_domain_stack 
++    add x5, x5, x6, lsl #12
++
++    mov x6, sp 
++    mov sp, x5 
++    str x6, [sp, #-8]! 
++    
++    /* invoke inner domain handler with parsed arguments from IDC */
++    adrp x7, inner_domain_handler
++    add x7, x7, :lo12:inner_domain_handler
++    blr x7 
++
++    /* The exit gate */
++    ldr x6, [sp], #8
++    mov sp, x6
++
++    /* Set TCR.T1SZ to 27
++    mrs x5, tcr_el1
++    and x5, x5, #0xffffffffffbfffff
++    orr x5, x5, #0x20000
++    msr tcr_el1, x5 
++
++    mov x6, #0xc03f 
++    mov x7, #0x1b 
++    movk x6, #0xc07f, lsl #16 
++    movk x7, #0x801b, lsl #16 
++    and x5, x5, x6 
++    cmp x5, x7 
++    b.ne 2b  */
++  
++    ldp x30, x5, [sp], #16 
++    msr DAIF, x5
++    isb
++    ret 
 \ No newline at end of file
