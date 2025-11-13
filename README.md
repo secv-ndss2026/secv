@@ -106,14 +106,14 @@ https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-aarch64-shenandoah
 https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-jdk8u272-ga.tar.bz2
 ```
 
-After that, the default build should complete successfully.
+After that, the default build should complete successfully. Suppose one gets any errors regarding failure to download required binaries for some reason (say the version is no longer available or the files were moved). In that case, one may simply download the failing files manually and save them in the downloads directory. This may require updating the expected hash in some cases. This can be accomplished by visiting bitbake layer attempting to download the file and updating the hash manually.
 
 #### SECV Baseline Building:
 
-To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository. For this move the `local.conf` file provided under the `s32g3` directory of this repository into the `build/conf/local.conf` directory of your build environment.
+To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository. For this, move the `local.conf` file provided under the `s32g3` directory of this repository into the `build/conf/local.conf` directory of your build environment.
 After the image is built, one may find it at build/tmp/deploy/images/s32g3/....sdcard
-This is the baseline image against which we compare SECV in terms of performance, communication latency and resource usage.
-In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board), via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
+This is the baseline image against which we compare SECV in terms of performance, communication latency, and resource usage.
+In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board) via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board, such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
 We include scripts to reproduce the LMBench experiments, the communication performance, the system performance (LMBench), and the IVN gateway resource usage. The scripts are identifiable by their filenames.
 
 #### Applying Patches and Building SECV:
