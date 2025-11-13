@@ -341,7 +341,7 @@ run_perf() {
         # Run candump on can_rx_interface interface expecting CAN id rx_id. Swap byte
         # order argument (-S) is used to facilitate incremental payload checking
         if [[ "${use_rx_interface}" == "true" ]]; then
-                candump -S "${can_rx_interface}","${rx_id}":"${id_filter}" >${rx_log} &
+                candump -S "${can_rx_interface}" >${rx_log} & 
                 pid_candump=$!
         fi
 
