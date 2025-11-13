@@ -66,6 +66,18 @@ After running the above commands, one should now have a `build_s32g399ardb3` fol
 
 Run the following command to test-build. This should download most of the needed dependencies.
 
+Edit the `conf/local.conf` file to disable building features not needed to run SECV. Add the following:
+
+```conf
+DISTRO_FEATURES:remove = "goldvip-cloud"
+DISTRO_FEATURES:remove = "goldvip-containerization"
+#DISTRO_FEATURES:remove = "goldvip-crypto"
+DISTRO_FEATURES:remove = "goldvip-dds"
+DISTRO_FEATURES:remove = "goldvip-ml"
+DISTRO_FEATURES:remove = "goldvip-ota"
+DISTRO_FEATURES:remove = "goldvip-adaptive-autosar"
+```
+
 ```sh
 $ bitbake fsl-image-goldvip
 ```
