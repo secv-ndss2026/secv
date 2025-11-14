@@ -75,13 +75,13 @@ index 5f2a06fb36c1a..a4253d0b5e421 100644
      			}
 -
 -				
--    			pr_info("[IMA debug] 2. Starting CAN ID list extraction\n");
+-    			//pr_info("[IMA debug] 2. Starting CAN ID list extraction\n");
      			
  				file->f_pos = 0;
 -    			uint32_t can_id_size = 0;
 +    			uint32_t mid_size = 0;
      			loff_t offset = fsize - sizeof(uint32_t);
--				pr_info("[IMA debug] Reading CAN ID size from offset: %lld, file size: %lld\n", offset, fsize);
+-				//pr_info("[IMA debug] Reading CAN ID size from offset: %lld, file size: %lld\n", offset, fsize);
 -				ssize_t r = kernel_read(file, &can_id_size, sizeof(uint32_t), &offset);
 -				can_id_size = le32_to_cpu(can_id_size);
 +				ssize_t r = kernel_read(file, &mid_size, sizeof(uint32_t), &offset);
@@ -121,15 +121,15 @@ index 5f2a06fb36c1a..a4253d0b5e421 100644
      			}
  
 -				if(can_id_size == 0){
--					pr_info("[IMA debug] No CAN ID detected\n");
+-					//pr_info("[IMA debug] No CAN ID detected\n");
 -					kfree(can_id_data);
 +				if(mid_size == 0){
-+					pr_info("[IMA debug] No MID detected\n");
++					//pr_info("[IMA debug] No MID detected\n");
 +					kfree(mid_data);
          			goto skip_tee;
  				}
 -			
--    			pr_info("[IMA debug] 3. CAN ID list extraction completed (%u bytes)\n", can_id_size);
+-    			//pr_info("[IMA debug] 3. CAN ID list extraction completed (%u bytes)\n", can_id_size);
 -
 -    			// Step 2: Prepare hash of the full merged file 
 -				offset = 0;
@@ -147,7 +147,7 @@ index 5f2a06fb36c1a..a4253d0b5e421 100644
 -    				kfree(file_buf);
 -    				kfree(can_id_data);
 +				if (!iint->ima_hash || !(iint->flags & IMA_COLLECTED)) {
-+    				pr_info("[IMA] hash not collected yet; skip TEE\n");
++    				//pr_info("[IMA] hash not collected yet; skip TEE\n");
 +    				kfree(mid_data);
      				goto skip_tee;
  				}
@@ -173,7 +173,7 @@ index 5f2a06fb36c1a..a4253d0b5e421 100644
 -					goto skip_tee;
 -				}
 +    			if (dlen != 32) {
-+        			pr_info("[IMA] Digest size=%zu for algo=%d (expected 32)\n", dlen, algo);
++        			//pr_info("[IMA] Digest size=%zu for algo=%d (expected 32)\n", dlen, algo);
 +        			kfree(mid_data);
 +        			goto skip_tee;
 +    			}
@@ -200,7 +200,7 @@ index 5f2a06fb36c1a..a4253d0b5e421 100644
 -    			struct exec_info_msg {
 +    			memcpy(digest, iint->ima_hash->digest, dlen);
 +
-+   			 	pr_info("[IMA] prepare sw msg struct\n");
++   			 	//pr_info("[IMA] prepare sw msg struct\n");
 +
 +				/* Prepare Secure World message */
 +    			struct __packed exec_info_msg {
@@ -226,7 +226,7 @@ index 5f2a06fb36c1a..a4253d0b5e421 100644
 -    			memcpy(msg->file_hash, merged_hash, 32);
 -    			memcpy(msg->can_ids, can_id_data, can_id_size);
 -
--    			pr_info("[IMA debug] 5. TEE session opened and exec_info_msg prepared for pid=%d\n", msg->pid);
+-    			//pr_info("[IMA debug] 5. TEE session opened and exec_info_msg prepared for pid=%d\n", msg->pid);
 -
 -    			// Step 4: Send to TEE 
 -    			tee_send_exec_info(msg->pid, msg->file_hash, (u32 *)msg->can_ids, msg->can_id_len / sizeof(u32));
@@ -234,9 +234,9 @@ index 5f2a06fb36c1a..a4253d0b5e421 100644
 -    			kfree(msg);
 -    			kfree(can_id_data);
 -			*/
--				end = ktime_get_ns();
--    			delta = end - start;
--				pr_info(">>> [measure] IMA executionoverhead: %lld ns\n", delta);
+-				//end = ktime_get_ns();
+-    			//delta = end - start;
+-				//pr_info(">>> [measure] IMA executionoverhead: %lld ns\n", delta);
 -
 -			skip_tee:
 -    			;
