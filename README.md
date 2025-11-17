@@ -118,7 +118,7 @@ We include scripts to reproduce the LMBench experiments, the communication perfo
 
 #### Applying Patches and Building SECV:
 
-To apply the patches, one needs to move them into the corresponding yocto layer. For example, for Linux, move the patches to the `sources/meta-gvip/recipes-kernel/linux/linux-32/patches` directory of your yocto environment. Then modify the file at `sources/meta-gvip/recipes-kernel/linux/linux-s32_%.bbappend` to include the patches as follows:
+To apply the patches, one needs to move them into the corresponding yocto layer. For example, for Linux, move the patches to the `sources/meta-gvip/recipes-kernel/linux/linux-s32/patches` directory of your yocto environment. Then modify the file at `sources/meta-gvip/recipes-kernel/linux/linux-s32_%.bbappend` to include the patches as follows:
 To the file, add:
 
 ```sh
