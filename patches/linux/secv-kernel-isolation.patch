@@ -194,7 +194,7 @@ index 14be5000c5a0..aedb3851f6f8 100644
 -				    (from), (n));			\
 -	uaccess_ttbr0_disable();					\
 -	__actu_ret;							\
-+({									\						
++({									\
 +	secv_raw_copy_to_user_wrapper(to, from, n);  \
  })
  
@@ -514,6 +514,39 @@ index 000000000000..a026eae0854f
 +}
 +EXPORT_SYMBOL(inner_domain_handler);
 \ No newline at end of file
+diff --git a/include/linux/secv/secv_hooks.h b/include/linux/secv/secv_hooks.h
+new file mode 100644
+index 000000000000..51aa6ea6fbc6
+--- /dev/null
++++ b/include/linux/secv/secv_hooks.h
+@@ -0,0 +1,26 @@
++/* 
++ * redirect existing functions to wrapper functions
++ */
++
++#ifndef __LINUX_SECV_HOOKS_H__
++#define __LINUX_SECV_HOOKS_H__
++
++#pragma once
++#if !defined(__VDSO__) && !defined(__ASSEMBLY__)
++
++#include <linux/atomic.h>
++#include <linux/percpu.h>
++#include <linux/uaccess.h>
++#include <asm/pgtable-types.h>
++#include <linux/mm_types.h>
++
++struct mm_struct;
++struct vm_area_struct;
++
++int secv_copy_mm(unsigned long clone_flags, struct task_struct *tsk);
++int secv_load_elf_binary(struct linux_binprm *bprm);
++asmlinkage void noinstr el1h_64_irq_handler(struct pt_regs *regs);
++extern void schedule_idle(void);
++
++#endif 
++#endif
+\ No newline at end of file
 diff --git a/arch/arm64/kernel/secv/secv_flag.c b/arch/arm64/kernel/secv/secv_flag.c
 new file mode 100644
 index 000000000000..f070c1dd11e9
@@ -746,7 +779,7 @@ index 000000000000..a39e501e0702
 +#include <linux/mm.h>
 +#include <linux/set_memory.h>
 +
-+#include <linux/secv/secv_ing.h>
++#include <linux/secv/secv_idc.h>
 +#include <asm/pgtable.h>
 +
 +int secv_enabled = 0;
@@ -1234,122 +1267,6 @@ index 77f01ac385f7..4a2b1a33ea0e 100644
  };
  
  static inline struct pid *task_pid(struct task_struct *task)
-diff --git a/include/linux/secv/secv_idc.h b/include/linux/secv/secv_idc.h
-new file mode 100644
-index 000000000000..764c778d0972
---- /dev/null
-+++ b/include/linux/secv/secv_idc.h
-@@ -0,0 +1,110 @@
-+#ifndef _SECV_IDC_H_
-+#define _SECV_IDC_H_
-+
-+#if !defined(__ASSEMBLY__) && !defined(__VDSO__)
-+
-+#include <linux/percpu.h>
-+#include <linux/bitops.h>
-+#include <linux/preempt.h>
-+#include <linux/irqflags.h>
-+#include <linux/types.h>
-+
-+#include <linux/init.h>
-+#include <linux/gfp.h>
-+#include <linux/hashtable.h>
-+
-+#define SCALL_SET_PTE    0xCA0ULL
-+#define SCALL_SET_PMD    0xCA1ULL
-+#define SCALL_SET_PUD    0xCA2ULL
-+#define SCALL_PTEP_GET_CLEAR 0xCA3ULL
-+#define SCALL_PTEP_SET_WRPROTECT 0xCA4ULL
-+#define SCALL_PMDP_ESTABLISH 0xCA5ULL
-+#define SCALL_CPU_DO_SWITCH_MM    0xCA6ULL
-+#define SCALL_PTEP_SET_ACCESS_FLAG    0xCA7ULL
-+#define SCALL_PGD_FREE    0xCA8ULL 
-+#define SCALL_LOAD_ELF_BINARY    0xCA9ULL 
-+
-+#define SCALL_LSM_BPRM 0xCC0ULL
-+#define SCALL_LSM_OPEN 0xCC1ULL
-+#define SCALL_LSM_MMAP 0xCC2ULL
-+#define SCALL_LSM_TASK_ALLOC 0xCC3ULL
-+#define SCALL_LSM_MPROTECT 0xCC4ULL
-+#define SCALL_LSM_PERMISSION 0xCC5ULL
-+
-+extern u64 IDC(u64 cmd, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
-+
-+/*
-+ * Shadow Mapping
-+ */
-+extern unsigned long shadow_offset_base;
-+#define SECV_SHADOW_OFFSET shadow_offset_base
-+
-+extern int secv_enabled;
-+extern int secv_pgtbl_enabled;
-+
-+#define __phys_to_shadow(x) ((unsigned long)(x) + SECV_SHADOW_OFFSET) 
-+#define __virt_to_shadow(x) ((unsigned long)(x) - PAGE_OFFSET + SECV_SHADOW_OFFSET) 
-+
-+#define __shadow_to_virt(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET + PAGE_OFFSET)
-+#define __shadow_to_phys(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET)
-+
-+#define __inner __section(.text.inner)
-+
-+extern char __task_text_start[], __task_text_end[];
-+#define __secv_tsk  __section(.text.task)
-+
-+extern unsigned long ptp_start_pfn;
-+extern unsigned long ptp_end_pfn;
-+#define ZONE_PTP_PFN 0x40000 
-+
-+extern char __inner_text_start[], __inner_text_end[];
-+
-+/*
-+ * INNER KERNEL STACK
-+ */
-+#define SECV_INNER_STKSZ PAGE_SIZE
-+#define SECV_INNER_STK_PGSZ (SECV_INNER_STKSZ / PAGE_SIZE)
-+
-+struct inner_stack {
-+	unsigned char stack[SECV_INNER_STKSZ];
-+} __attribute__((aligned(PAGE_SIZE)));
-+
-+DECLARE_PER_CPU_PAGE_ALIGNED(struct inner_stack, inner_stacks);
-+
-+
-+struct iret_stack {
-+	unsigned long stack_bottom;
-+	unsigned long stack_bottom_shdw;
-+	unsigned long stack[5];
-+} __attribute__((aligned(PAGE_SIZE)));
-+
-+DECLARE_PER_CPU_PAGE_ALIGNED(struct iret_stack, iret_stacks);
-+
-+DECLARE_PER_CPU(unsigned long, secv_temp);
-+
-+/* INIT PAGE TABLES */
-+#define SECV_INIT_PGTBL_COUNT 4096
-+
-+enum secv_pgtbl_level {
-+	SECV_PTP_NONE,
-+	SECV_PTP_PGD,
-+	SECV_PTP_P4D,
-+	SECV_PTP_PUD,
-+	SECV_PTP_PMD,
-+	SECV_PTP_UPTE,
-+	SECV_PTP_KPTE,
-+	SECV_PTP_NUM
-+};
-+
-+
-+int __init secv_init(void);
-+int secv_finalize(void);
-+
-+void secv_early_alloc_pgt_buf(void);
-+void *secv_alloc_low_pages(unsigned int);
-+
-+unsigned long
-+__secv_entry(unsigned long, unsigned long, unsigned long, unsigned long);
-+
-+#endif 
-+#endif 
 diff --git a/init/main.c b/init/main.c
 index c787e94cc898..b823c7ad7f53 100644
 --- a/init/main.c
@@ -1423,7 +1340,7 @@ index 000000000000..f5d9b7048bcf
 +#endif
 +
 +#include <linux/secv/secv_idc.h> 
-+#include "secv_lsm.h" 
++#include <linux/secv/secv_lsm.h>
 +
 +/* ensure per cpu action */
 +DECLARE_PER_CPU(u32, secv_in_idc);
@@ -1761,11 +1678,11 @@ index 000000000000..f5d9b7048bcf
 +	.name = "secv",
 +	.init = secv_lsm_init,
 +};
-diff --git a/security/secv_lsm.h b/security/secv_lsm.h
+diff --git a/include/linux/secv/secv_lsm.h b/include/linux/secv/secv_lsm.h
 new file mode 100644
 index 000000000000..fe9c603cea5b
 --- /dev/null
-+++ b/security/secv_lsm.h
++++ b/include/linux/secv/secv_lsm.h
 @@ -0,0 +1,25 @@
 +/* security/secv_lsm.h */
 +#ifndef _SECV_LSM_H_
@@ -1793,3 +1710,183 @@ index 000000000000..fe9c603cea5b
 +
 +#endif
 \ No newline at end of file
+diff --git a/include/linux/secv/secv_flag.h b/include/linux/secv/secv_flag.h
+new file mode 100644
+index 000000000000..bd6124ec5aaa
+--- /dev/null
++++ b/include/linux/secv/secv_flag.h
+@@ -0,0 +1,58 @@
++#ifndef __SECV_FLAG_H
++#define __SECV_FLAG_H
++
++#include <linux/percpu.h>
++#include <linux/preempt.h>
++#include <linux/types.h>
++
++#define SECV_SCALL_BASE  0xCA0ULL
++#define SECV_SCALL_LAST  0xCB3ULL
++
++#define SCALL_ANY   (SECV_SCALL_LAST + 1)
++#define SECV_FLAG_ANY_BIT   63
++
++DECLARE_PER_CPU(u64, __secv_idc_flags_mask);
++
++static __always_inline int __secv_flag_idx(u64 cmd)
++{
++	if (cmd == SCALL_ANY)
++		return SECV_FLAG_ANY_BIT;
++	if (cmd < SECV_SCALL_BASE || cmd > SECV_SCALL_LAST)
++		return -1;
++	return (int)(cmd - SECV_SCALL_BASE);
++}
++
++static __always_inline bool secv_flag_test(u64 cmd)
++{
++	int idx = __secv_flag_idx(cmd);
++	u64 m;
++	if (idx < 0) return false;
++	preempt_disable();
++	m = this_cpu_read(__secv_idc_flags_mask);
++	preempt_enable();
++	return (m >> idx) & 1ULL;
++}
++
++static __always_inline void secv_flag_set(u64 cmd)
++{
++	int idx = __secv_flag_idx(cmd);
++	u64 m;
++	if (idx < 0) return;
++	preempt_disable();
++	m = this_cpu_read(__secv_idc_flags_mask);
++	this_cpu_write(__secv_idc_flags_mask, m | (1ULL << idx));
++	preempt_enable();
++}
++
++static __always_inline void secv_flag_clear(u64 cmd)
++{
++	int idx = __secv_flag_idx(cmd);
++	u64 m;
++	if (idx < 0) return;
++	preempt_disable();
++	m = this_cpu_read(__secv_idc_flags_mask);
++	this_cpu_write(__secv_idc_flags_mask, m & ~(1ULL << idx));
++	preempt_enable();
++}
++
++#endif /* SECV_FLAG_H */
+\ No newline at end of file
+diff --git a/include/linux/secv/secv_idc.h b/include/linux/secv/secv_idc.h
+new file mode 100644
+index 000000000000..75f9150385ff
+--- /dev/null
++++ b/include/linux/secv/secv_idc.h
+@@ -0,0 +1,109 @@
++#ifndef _SECV_IDC_H_
++#define _SECV_IDC_H_
++
++#if !defined(__ASSEMBLY__) && !defined(__VDSO__)
++
++#include <linux/percpu.h>
++#include <linux/bitops.h>
++#include <linux/preempt.h>
++#include <linux/irqflags.h>
++#include <linux/types.h>
++#include <linux/compiler_types.h>
++
++#include <linux/init.h>
++#include <linux/gfp.h>
++#include <linux/hashtable.h>
++
++#define SCALL_SET_PTE    0xCA0ULL
++#define SCALL_SET_PMD    0xCA1ULL
++#define SCALL_SET_PUD    0xCA2ULL
++#define SCALL_PTEP_GET_CLEAR 0xCA3ULL
++#define SCALL_PTEP_SET_WRPROTECT 0xCA4ULL
++#define SCALL_PMDP_ESTABLISH 0xCA5ULL
++#define SCALL_CPU_DO_SWITCH_MM    0xCA6ULL
++#define SCALL_PTEP_SET_ACCESS_FLAG    0xCA7ULL
++#define SCALL_PGD_FREE    0xCA8ULL 
++#define SCALL_LOAD_ELF_BINARY    0xCA9ULL 
++
++#define SCALL_LSM_BPRM 0xCC0ULL
++#define SCALL_LSM_OPEN 0xCC1ULL
++#define SCALL_LSM_MMAP 0xCC2ULL
++#define SCALL_LSM_TASK_ALLOC 0xCC3ULL
++#define SCALL_LSM_MPROTECT 0xCC4ULL
++#define SCALL_LSM_PERMISSION 0xCC5ULL
++
++extern u64 IDC(u64 cmd, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
++
++/*
++ * Shadow Mapping
++ */
++extern unsigned long shadow_offset_base;
++#define SECV_SHADOW_OFFSET shadow_offset_base
++
++extern int secv_enabled;
++extern int secv_pgtbl_enabled;
++
++#define __phys_to_shadow(x) ((unsigned long)(x) + SECV_SHADOW_OFFSET) 
++#define __virt_to_shadow(x) ((unsigned long)(x) - PAGE_OFFSET + SECV_SHADOW_OFFSET) 
++
++#define __shadow_to_virt(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET + PAGE_OFFSET)
++#define __shadow_to_phys(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET)
++
++#define __inner    __attribute__((__section__(".text.inner")))
++#define __secv_tsk __attribute__((__section__(".text.task")))
++
++extern unsigned long ptp_start_pfn;
++extern unsigned long ptp_end_pfn;
++#define ZONE_PTP_PFN 0x40000 
++
++extern char __inner_text_start[], __inner_text_end[];
++extern char __task_text_start[], __task_text_end[];
++/*
++ * INNER KERNEL STACK
++ */
++#define SECV_INNER_STKSZ PAGE_SIZE
++#define SECV_INNER_STK_PGSZ (SECV_INNER_STKSZ / PAGE_SIZE)
++
++struct inner_stack {
++	unsigned char stack[SECV_INNER_STKSZ];
++} __attribute__((aligned(PAGE_SIZE)));
++
++DECLARE_PER_CPU_PAGE_ALIGNED(struct inner_stack, inner_stacks);
++
++
++struct iret_stack {
++	unsigned long stack_bottom;
++	unsigned long stack_bottom_shdw;
++	unsigned long stack[5];
++} __attribute__((aligned(PAGE_SIZE)));
++
++DECLARE_PER_CPU_PAGE_ALIGNED(struct iret_stack, iret_stacks);
++
++DECLARE_PER_CPU(unsigned long, secv_temp);
++
++/* INIT PAGE TABLES */
++#define SECV_INIT_PGTBL_COUNT 4096
++
++enum secv_pgtbl_level {
++	SECV_PTP_NONE,
++	SECV_PTP_PGD,
++	SECV_PTP_P4D,
++	SECV_PTP_PUD,
++	SECV_PTP_PMD,
++	SECV_PTP_UPTE,
++	SECV_PTP_KPTE,
++	SECV_PTP_NUM
++};
++
++
++int __init secv_init(void);
++int secv_finalize(void);
++
++void secv_early_alloc_pgt_buf(void);
++void *secv_alloc_low_pages(unsigned int);
++
++unsigned long
++__secv_entry(unsigned long, unsigned long, unsigned long, unsigned long);
++
++#endif 
++#endif 
