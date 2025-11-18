@@ -1,1471 +1,1412 @@
 diff --git a/arch/arm/include/asm/smp.h b/arch/arm/include/asm/smp.h
-index 8c05a7f374d8..d13e4fbed575 100644
+index 8c05a7f374d8..03e9c8d58270 100644
 --- a/arch/arm/include/asm/smp.h
 +++ b/arch/arm/include/asm/smp.h
-@@ -69,6 +69,8 @@ static inline void __cpu_die(unsigned int cpu) { }
+@@ -69,6 +69,7 @@ static inline void __cpu_die(unsigned int cpu) { }
  extern void arch_send_call_function_single_ipi(int cpu);
  extern void arch_send_call_function_ipi_mask(const struct cpumask *mask);
  extern void arch_send_wakeup_ipi_mask(const struct cpumask *mask);
-+extern void arch_send_sorhta_can_send_single_ipi(int cpu);
-+//extern void arch_send_sorhta_can_recv_single_ipi(int cpu);
++extern void arch_set_secv_ipi_handler(void(*handler)(void*));
  
  extern int register_ipi_completion(struct completion *completion, int cpu);
  
 diff --git a/arch/arm/kernel/smp.c b/arch/arm/kernel/smp.c
-index 3431c0553f45..f85c43524940 100644
+index 3431c0553f45..14831cf35ff5 100644
 --- a/arch/arm/kernel/smp.c
 +++ b/arch/arm/kernel/smp.c
-@@ -65,6 +65,8 @@ enum ipi_msg_type {
+@@ -65,6 +65,7 @@ enum ipi_msg_type {
  	IPI_CPU_STOP,
  	IPI_IRQ_WORK,
  	IPI_COMPLETION,
-+	IPI_SORHTA_CAN_SEND, //@kymartin
-+	//IPI_SORHTA_CAN_RECV, //@kymartin
++	IPI_SECV,
  	NR_IPI,
  	/*
  	 * CPU_BACKTRACE is special and not included in NR_IPI
-@@ -539,6 +541,8 @@ static const char *ipi_types[NR_IPI] __tracepoint_string = {
+@@ -539,6 +540,7 @@ static const char *ipi_types[NR_IPI] __tracepoint_string = {
  	[IPI_CPU_STOP]		= "CPU stop interrupts",
  	[IPI_IRQ_WORK]		= "IRQ work interrupts",
  	[IPI_COMPLETION]	= "completion interrupts",
-+	[IPI_SORHTA_CAN_SEND] = "SorHTA CAN send interrupts",
-+	//[IPI_SORHTA_CAN_RECV] = "SorHTA CAN recv interrupts"
++	[IPI_SECV]			= "SECV interrupt from SSMe",
  };
  
  static void smp_cross_call(const struct cpumask *target, unsigned int ipinr);
-@@ -575,6 +579,17 @@ void arch_send_call_function_single_ipi(int cpu)
- 	smp_cross_call(cpumask_of(cpu), IPI_CALL_FUNC);
- }
- 
-+//@kymartin
-+void arch_send_sorhta_can_send_single_ipi(int cpu) {
-+	smp_cross_call(cpumask_of(cpu), IPI_SORHTA_CAN_SEND);
-+}
-+
-+//@kymartin
-+/*void arch_send_sorhta_can_recv_single_ipi(int cpu) {
-+	smp_cross_call(cpumask_of(cpu), IPI_SORHTA_CAN_RECV);
-+}*/
-+
-+
- #ifdef CONFIG_IRQ_WORK
- void arch_irq_work_raise(void)
- {
 diff --git a/arch/arm64/boot/dts/freescale/s32g.dtsi b/arch/arm64/boot/dts/freescale/s32g.dtsi
-index b81ae52f59d0..225c560b978e 100644
+index b81ae52f59d0..1b675c94da47 100644
 --- a/arch/arm64/boot/dts/freescale/s32g.dtsi
 +++ b/arch/arm64/boot/dts/freescale/s32g.dtsi
-@@ -46,6 +46,17 @@ pfe_reserved_bdr: pfebufs@835e0000 {
+@@ -46,6 +46,22 @@ pfe_reserved_bdr: pfebufs@835e0000 {
  			/* 128 KB */
  			reg = <0 0x835e0000 0 0x20000>;
  		};
 +
-+		sorhta_reserved_cored: sorhta_reserved_cored@E0000000 {
-+			reg = <0 0xE0000000 0 0x2000000>;
++		secv_shmem: sorhta_shmem@E0000000 {
++			compatible = "shared-dma-pool";
++			reg = <0 0xE0000000 0 0x2010000>;
 +			no-map;
++			//reusable
 +		};
 +
-+		sorhta_shmem: sorhta_shmem@E2000000 {
++		secv_buffers_shmem: sorhta_buffers_shmem@E2010000 {
 +			compatible = "shared-dma-pool";
-+			reg = <0 0xE2000000 0 0x1000000>;
-+			no-map;
++			reg = <0 0xE2010000 0 0xFF0000>;
++			//no-map;
++			reusable;
 +		};
++
++
  		/* ends 0x83600000 */
  	};
  
-diff --git a/arch/arm64/boot/dts/freescale/s32g3.dtsi b/arch/arm64/boot/dts/freescale/s32g3.dtsi
-index ae6e116df5e3..be7572e62eaf 100644
---- a/arch/arm64/boot/dts/freescale/s32g3.dtsi
-+++ b/arch/arm64/boot/dts/freescale/s32g3.dtsi
-@@ -18,9 +18,9 @@ core0 {
- 					cpu = <&cpu0>;
- 				};
- 
--				core1 {
-+				/*core1 {
- 					cpu = <&cpu1>;
--				};
-+				};*/
- 
- 				core2 {
- 					cpu = <&cpu2>;
-@@ -60,7 +60,7 @@ cpu0: cpu@0 {
- 			#cooling-cells = <2>;
- 		};
- 
--		cpu1: cpu@1 {
-+		/*cpu1: cpu@1 {
- 			device_type = "cpu";
- 			compatible = "arm,cortex-a53";
- 			reg = <0x1>;
-@@ -68,7 +68,7 @@ cpu1: cpu@1 {
- 			clocks = <&dfs S32CC_SCMI_PERF_A53>;
- 			next-level-cache = <&cluster0_l2>;
- 			#cooling-cells = <2>;
--		};
-+		};*/
- 
- 		cpu2: cpu@2 {
- 			device_type = "cpu";
 diff --git a/arch/arm64/include/asm/smp.h b/arch/arm64/include/asm/smp.h
-index 9b31e6d0da17..1f2187d4e7d7 100644
+index 9b31e6d0da17..892dcad51bd3 100644
 --- a/arch/arm64/include/asm/smp.h
 +++ b/arch/arm64/include/asm/smp.h
-@@ -87,6 +87,9 @@ extern void secondary_entry(void);
+@@ -87,6 +87,7 @@ extern void secondary_entry(void);
  
  extern void arch_send_call_function_single_ipi(int cpu);
  extern void arch_send_call_function_ipi_mask(const struct cpumask *mask);
-+// @kymartin
-+extern void arch_send_sorhta_can_send_single_ipi(int cpu);
-+//extern void arch_send_sorhta_can_recv_single_ipi(int cpu);
++extern void arch_set_secv_ipi_handler(void(*handler)(void*));
  
  #ifdef CONFIG_ARM64_ACPI_PARKING_PROTOCOL
  extern void arch_send_wakeup_ipi_mask(const struct cpumask *mask);
 diff --git a/arch/arm64/kernel/smp.c b/arch/arm64/kernel/smp.c
-index 14365ef84244..c20749b902b6 100644
+index 14365ef84244..47c749cfb9cd 100644
 --- a/arch/arm64/kernel/smp.c
 +++ b/arch/arm64/kernel/smp.c
-@@ -73,6 +73,8 @@ enum ipi_msg_type {
+@@ -73,6 +73,7 @@ enum ipi_msg_type {
  	IPI_TIMER,
  	IPI_IRQ_WORK,
  	IPI_WAKEUP,
-+	IPI_SORHTA_CAN_SEND,
-+	//IPI_SORHTA_CAN_RECV,
++	IPI_SECV,
  	NR_IPI
  };
  
-@@ -799,6 +801,16 @@ void arch_send_call_function_single_ipi(int cpu)
+@@ -799,6 +800,13 @@ void arch_send_call_function_single_ipi(int cpu)
  	smp_cross_call(cpumask_of(cpu), IPI_CALL_FUNC);
  }
  
-+void arch_send_sorhta_can_send_single_ipi(int cpu)
-+{
-+	smp_cross_call(cpumask_of(cpu), IPI_SORHTA_CAN_SEND);
-+}
++void(*secv_ipi_handler)(void*) = NULL;
 +
-+/*void arch_send_sorhta_can_recv_single_ipi(int cpu)
++void arch_set_secv_ipi_handler(void(*handler)(void*))
 +{
-+	smp_cross_call(cpumask_of(cpu), IPI_SORHTA_CAN_RECV);
-+}*/
++	secv_ipi_handler = handler;
++}
 +
  #ifdef CONFIG_ARM64_ACPI_PARKING_PROTOCOL
  void arch_send_wakeup_ipi_mask(const struct cpumask *mask)
  {
-@@ -971,7 +983,7 @@ void __init set_smp_ipi_range(int ipi_base, int n)
- 	}
+@@ -886,6 +894,13 @@ static void do_handle_IPI(int ipinr)
+ 			unreachable();
+ 		}
+ 		break;
++	case IPI_SECV:
++		if(secv_ipi_handler != NULL) {
++			secv_ipi_handler(NULL);
++		} else {
++			pr_crit("CPU%u: SECV IPI handler not set 0x%x\n", cpu, ipinr);
++		}
++		break;
  
- 	ipi_irq_base = ipi_base;
--
-+	printk(KERN_ALERT "IPI IRQ_BASE: %d\n", ipi_irq_base);
- 	/* Setup the boot CPU immediately */
- 	ipi_setup(smp_processor_id());
+ #ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
+ 	case IPI_TIMER:
+diff --git a/drivers/net/can/dev/rx-offload.c b/drivers/net/can/dev/rx-offload.c
+index 77091f7d1fa7..62cc7382aa80 100644
+--- a/drivers/net/can/dev/rx-offload.c
++++ b/drivers/net/can/dev/rx-offload.c
+@@ -172,6 +172,43 @@ can_rx_offload_offload_one(struct can_rx_offload *offload, unsigned int n)
+ 	return skb;
  }
-diff --git a/drivers/net/can/Makefile b/drivers/net/can/Makefile
-index d5e5af02f3ac..8c025ca36e8d 100644
---- a/drivers/net/can/Makefile
-+++ b/drivers/net/can/Makefile
-@@ -12,6 +12,7 @@ obj-y				+= rcar/
- obj-y				+= spi/
- obj-y				+= usb/
- obj-y				+= softing/
-+obj-y				+= sorhta/
  
- obj-$(CONFIG_CAN_AT91)		+= at91_can.o
- obj-$(CONFIG_CAN_BXCAN)		+= bxcan.o
++/**
++ * SECV: offload one message from the given mb. similar to the 
++ * function above, only the mailbox read function is different.
++ */
++static struct sk_buff* 
++secv_can_rx_offload_offload_one(struct can_rx_offload *offload, void* mb)
++{
++	struct sk_buff *skb;
++	struct can_rx_offload_cb *cb;
++	bool drop = false;
++	u32 timestamp;
++
++	/* If queue is full drop frame */
++	if (unlikely(skb_queue_len(&offload->skb_queue) >
++		     offload->skb_queue_len_max))
++		drop = true;
++
++	skb = offload->secv_mailbox_read(offload, mb, &timestamp, drop);
++
++		/* There was a problem reading the mailbox, propagate
++	 * error value.
++	 */
++	if (IS_ERR(skb)) {
++		//printk(KERN_ALERT "Problem reading the mailbox?\n");
++		offload->dev->stats.rx_dropped++;
++		offload->dev->stats.rx_fifo_errors++;
++
++		return skb;
++	}
++
++	/* Mailbox was read. */
++	cb = can_rx_offload_get_cb(skb);
++	cb->timestamp = timestamp;
++
++	return skb;
++}
++
+ int can_rx_offload_irq_offload_timestamp(struct can_rx_offload *offload,
+ 					 u64 pending)
+ {
+@@ -199,6 +236,26 @@ int can_rx_offload_irq_offload_timestamp(struct can_rx_offload *offload,
+ }
+ EXPORT_SYMBOL_GPL(can_rx_offload_irq_offload_timestamp);
+ 
++int secv_can_rx_offload_irq_offload_timestamp(struct can_rx_offload *offload, void* secv_rx_mb) {
++	unsigned int i;
++	int received = 0;
++
++	struct sk_buff* skb;
++	skb = secv_can_rx_offload_offload_one(offload, secv_rx_mb);
++
++	if(IS_ERR_OR_NULL(skb)) {
++		//printk(KERN_ALERT "Nothing received\n");
++		return received;
++	}
++
++	//printk(KERN_ALERT "Queueing CAN message\n");
++	__skb_queue_add_sort(&offload->skb_irq_queue, skb, can_rx_offload_compare);
++	received++;
++
++	return received;
++}
++EXPORT_SYMBOL_GPL(secv_can_rx_offload_irq_offload_timestamp);
++
+ int can_rx_offload_irq_offload_fifo(struct can_rx_offload *offload)
+ {
+ 	struct sk_buff *skb;
+diff --git a/drivers/net/can/dev/skb.c b/drivers/net/can/dev/skb.c
+index 3ebd4f779b9b..83334f1cd904 100644
+--- a/drivers/net/can/dev/skb.c
++++ b/drivers/net/can/dev/skb.c
+@@ -367,6 +367,7 @@ bool can_dropped_invalid_skb(struct net_device *dev, struct sk_buff *skb)
+ 	return false;
+ 
+ inval_skb:
++	printk(KERN_ALERT "Invalid CAN skb\n");
+ 	kfree_skb(skb);
+ 	dev->stats.tx_dropped++;
+ 	return true;
 diff --git a/drivers/net/can/flexcan/flexcan-core.c b/drivers/net/can/flexcan/flexcan-core.c
-index 2800e4ef6cd0..ba7c070c90cf 100644
+index 2800e4ef6cd0..e9e2fe3ac184 100644
 --- a/drivers/net/can/flexcan/flexcan-core.c
 +++ b/drivers/net/can/flexcan/flexcan-core.c
-@@ -31,8 +31,15 @@
+@@ -31,9 +31,42 @@
  #include <linux/pm_runtime.h>
  #include <linux/regmap.h>
  #include <linux/regulator/consumer.h>
-+#include <linux/smp.h>
-+#include <linux/atomic.h>
++#include <asm/barrier.h>
+ 
+ #include "flexcan.h"
+ 
++// SECV: Includes
 +#include <linux/of_reserved_mem.h>
 +#include <linux/of_address.h>
 +#include <linux/dma-mapping.h>
++#include <linux/timer.h>
++#include <linux/smp.h>
++#include "secv_flexcan.h"
 +
- 
- #include "flexcan.h"
-+#include "teehsm.h"
- 
++struct secv_can_buffer_rec {
++	void* buffer; // the pointer to the buffer base.
++	void* kernel_addr; // the kernel address base of this page.
++	u_int64_t phys_addr;
++	u_int64_t next_bit;
++	u_int64_t available; // tacks used frames
++	spinlock_t lock;
++};
++
++void __iomem *secv_shmem_virt_addr = NULL;
++struct secv_flexcan_priv *secv_flexcan_privs[NUM_FLEXCAN_INTERFACES] = { NULL };
++struct secv_tx_ring_buffers *secv_flexcan_tx_rings[NUM_FLEXCAN_INTERFACES] = { NULL };
++struct secv_rx_ring_buffers *secv_flexcan_rx_rings[NUM_FLEXCAN_INTERFACES] = { NULL };
++static struct secv_tx_ring_buffers secv_local_flexcan_tx_rings[NUM_FLEXCAN_INTERFACES];
++static struct secv_rx_ring_buffers secv_local_flexcan_rx_rings[NUM_FLEXCAN_INTERFACES];
++static struct timer_list secv_tx_timers[NUM_FLEXCAN_INTERFACES];
++static spinlock_t secv_xmit_locks[NUM_FLEXCAN_INTERFACES];
++static spinlock_t secv_recv_locks[NUM_FLEXCAN_INTERFACES];
++
++static struct net_device* secv_flexcan_devs[NUM_FLEXCAN_INTERFACES] = {NULL};
++static u32 waiting_tx_complete[NUM_FLEXCAN_INTERFACES] = {0};
++static u32 tx_pending[NUM_FLEXCAN_INTERFACES] = {0};
++static struct tx_mb secv_leftover_tx_mbs[NUM_FLEXCAN_INTERFACES];
++
  #define DRV_NAME			"flexcan"
  
-@@ -204,6 +211,19 @@
- 
- #define FLEXCAN_TIMEOUT_US		(250)
- 
-+struct __attribute__((aligned(8))) sorhta_request {
-+	atomic_t kind;
-+	atomic64_t buf_addr;
-+	atomic64_t buf_size;
-+	atomic_t result[128];
-+	atomic_t status;
-+};
-+
-+struct __attribute__((aligned(8))) sorhta_settings {
-+	u_int64_t request_memory_base_addr;
-+	atomic_t initialized;
-+};
-+
- /* Structure of the message buffer */
- struct flexcan_mb {
- 	u32 can_ctrl;
-@@ -503,8 +523,64 @@ static const struct can_bittiming_const s32cc_flexcan_fd_data_bittiming_const =
- 	.brp_inc = 1,
- };
- 
-+static void __iomem *sorhta_shmem_virt_addr = NULL;
-+static struct sorhta_request __iomem *sorhta_requests = NULL;
-+static struct sorhta_settings __iomem *sorhta_settings = NULL;
-+
- static irqreturn_t flexcan_irq_state(int irq, void *dev_id);
- 
-+/* Handle an IPI from our SORHTA module running on Core 0x1*/
-+static irqreturn_t sorhta_ipi_handler(int irq, void* dev_id)
-+{
-+	printk(KERN_ALERT "IPI from SORHTA %s\n", __FUNCTION__);
-+	return IRQ_HANDLED;
-+}
-+
-+#define S32_MPIDR_CPU_MASK_BITS 3
-+
-+static int send_sgi_to_core(uint32_t target_core_pos, uint8_t sgi_id) {
-+    if (sgi_id > 15) {
-+        return -1; // Invalid SGI ID
-+    }
-+    
-+    uint32_t cpu_id = target_core_pos & ((1 << S32_MPIDR_CPU_MASK_BITS) - 1);
-+    uint32_t cluster_id = target_core_pos >> S32_MPIDR_CPU_MASK_BITS;
-+    
-+    if (cpu_id > 15) {
-+        return -2; // CPU ID exceeds max Aff0 value
-+    }
-+    
-+    uint64_t sgi_value = ((uint64_t)sgi_id << 24) |
-+                          ((uint64_t)cluster_id << 16) |
-+                          (1ULL << cpu_id);
-+    
-+    __asm__ volatile (
-+        "msr S3_0_C12_C11_5, %0\n"
-+        "isb\n"
-+        :
-+        : "r" (sgi_value)
-+        : "memory"
-+    );
-+    
-+    return 0; // Success
-+}
-+
-+/*Send an IPI to our SORHTA module, this is supposed to be running on core 0x1*/
-+static void send_ipi_to_sorhta(unsigned int cpu_id, unsigned int vector) {
-+	if(cpu_online(cpu_id)) {
-+		//arch_send_sorhta_can_send_single_ipi(1);
-+		send_sgi_to_core(0x1, 0x8);
-+		// arch_send_sorhta_can_send_single_ipi(2);
-+		// arch_send_sorhta_can_send_single_ipi(3);
-+		// arch_send_sorhta_can_send_single_ipi(4);
-+		printk(KERN_ALERT "Sent IPI to CPU%d\n", cpu_id);
-+	} else {
-+		printk(KERN_ALERT "Can't send IPI to SORHTA\n");
-+	}
-+	//smp_call_function_single(cpu_id, ipi_hander, NULL, 0);
-+}
-+
-+
- /* FlexCAN module is essentially modelled as a little-endian IP in most
-  * SoCs, i.e the registers as well as the message buffer areas are
-  * implemented in a little-endian fashion.
-@@ -520,26 +596,270 @@ static irqreturn_t flexcan_irq_state(int irq, void *dev_id);
-  */
- static inline u32 flexcan_read_be(void __iomem *addr)
- {
--	return ioread32be(addr);
-+	//teehsm_notify_read_be();
-+	//return ioread32be(addr);
-+	return teehsm_read_be(addr);
- }
- 
- static inline void flexcan_write_be(u32 val, void __iomem *addr)
- {
--	iowrite32be(val, addr);
-+	//teehsm_notify_write_be();
-+	//iowrite32be(val, addr);
-+	teehsm_write_be(addr, val);
- }
+ /* 8 for RX fifo and 2 error handling */
+@@ -530,12 +563,12 @@ static inline void flexcan_write_be(u32 val, void __iomem *addr)
  
  static inline u32 flexcan_read_le(void __iomem *addr)
  {
 -	return ioread32(addr);
-+    return ioread32(addr); int cpu_id = raw_smp_processor_id();
-+    struct sorhta_request __iomem *req = &sorhta_requests[cpu_id];
-+    u64 address = translate_el1((u64)addr);
-+    u32 result;
-+    
-+    // Initialize the request
-+	// writel((u32)(address & 0xFFFFFFFF), (&req->buf_addr)+4);
-+	// writel((u32)(address >> 32), &req->buf_addr);
-+	while(readq(&req->buf_addr) != address) {
-+		atomic_long_set(&req->buf_addr, address);
-+	}
-+	//writeq(address,(void __iomem*) &req->buf_addr);
-+    //req->buf_addr = address;
-+	while(readq(&req->buf_size) != 1) {
-+		atomic_long_set(&req->buf_size, 1);
-+		printk(KERN_ALERT "SORHTA request waiting\n");
-+	}
-+	
-+	//writel((u32)(1),(void __iomem*) &req->buf_size);
-+    //req->buf_size = 1;  // Reading one u32 value
-+	while(atomic_read(&req->kind) != SORHTA_REQUEST_READ){
-+		atomic_set(&req->kind, SORHTA_REQUEST_READ);
-+		printk(KERN_ALERT "SORHTA request waiting request setting2\n");
-+	}
-+	//writel((u32)SORHTA_REQUEST_READ,(void __iomem*) &req->kind);
-+    //req->kind = SORHTA_REQUEST_READ;  // Match the constant used in Rust code
-+    
-+    // Clear any previous result
-+    //memset(req->result, 0, sizeof(req->result));
-+    
-+    // Make sure all writes to the request are visible before updating status
-+    smp_wmb();
-+    
-+    // Set request as valid - use atomic_set for writing
-+    //atomic_set(&req->status, SORHTA_REQUEST_VALID);  // Match the constant used in Rust code
-+	writel(SORHTA_REQUEST_VALID, (void __iomem*)&req->status);
-+    // printk(KERN_INFO "CPU %d: Request submitted - addr: 0x%llx, status ptr: 0x%lx buf_addr: 0x%lx req_kind: %d\n", 
-+	// 	cpu_id, (unsigned long long)address, (unsigned long)&req->status, readq(&req->buf_addr), readl(&req->kind));
-+    // Ensure status update is visible to all cores
-+    dsb(sy);
-+    
-+    // printk(KERN_INFO "CPU %d: Request submitted - addr: 0x%llx, status ptr: 0x%lx\n", 
-+    //        cpu_id, (unsigned long long)address, (unsigned long)&req->status);
-+    
-+    // Wait for request to be taken by worker
-+    while(atomic_read(&req->status) == SORHTA_REQUEST_VALID) {
-+        cpu_relax();  // Reduce CPU usage in tight loop
-+        printk(KERN_ALERT "SORHTA request waiting request validation2\n");
-+        // Optional: add timeout logic
-+        // if (++timeout_counter > MAX_TIMEOUT) {
-+        //     printk(KERN_WARNING "SORHTA request timed out\n");
-+        //     return 0xFFFFFFFF;  // or appropriate error value
-+        // }
-+    }
-+    
-+    // Wait for request to be completed
-+    while(atomic_read(&req->status) != SORHTA_REQUEST_COMPLETED) {
-+        cpu_relax();  // Reduce CPU usage in tight loop
-+        
-+        // Check for failure
-+        if (atomic_read(&req->status) == SORHTA_REQUEST_FAILED) {
-+            printk(KERN_INFO "CPU %d: Request Failed - addr: 0x%llx, status ptr: 0x%lx buf_addr: 0x%lx req_kind: %d req_kind2: %d\n", 
-+			cpu_id, (unsigned long long)address, (unsigned long)&req->status, readq(&req->buf_addr), readl(&req->result[0]), readl(&req->kind));
-+            atomic_set(&req->status, SORHTA_REQUEST_NONE);
-+            dsb(sy);
-+            return 0xFFFFFFFF;  // or appropriate error value
-+        }
-+        
-+        // Optional: add additional timeout logic here
-+    }
-+    
-+    // Read the result
-+    result = atomic_read(&req->result[0]);
-+    
-+    // Mark request as finished
-+    atomic_set(&req->status, SORHTA_REQUEST_NONE);
-+    
-+    // Ensure status update is visible
-+    dsb(sy);
-+    
-+    return result;
++	return secv_read_le(addr);
  }
  
-+
  static inline void flexcan_write_le(u32 val, void __iomem *addr)
  {
 -	iowrite32(val, addr);
-+	//teehsm_notify_write_le();
-+	// iowrite32(val, addr); return;
-+	//send_ipi_to_sorhta(0x1, 0x1);
-+	//teehsm_write_le(addr, val);
-+	//return;
-+	int cpu_id = raw_smp_processor_id();
-+    struct sorhta_request __iomem *req = &sorhta_requests[cpu_id];
-+    u64 address = translate_el1((u64)addr);
-+    //u32 result;
-+	u32 status;
-+    
-+
-+	while(readq(&req->buf_addr) != address) {
-+		atomic_long_set(&req->buf_addr, address);
-+		//printk(KERN_ALERT "SORHTA request waiting set buf add\n");
-+	}
-+
-+	while(readq(&req->buf_size) != 1) {
-+		atomic_long_set(&req->buf_size, 1);
-+		//printk(KERN_ALERT "SORHTA request waiting set bufsize\n");
-+	}
-+	
-+	while(atomic_read(&req->kind) != SORHTA_REQUEST_WRITE){
-+		atomic_set(&req->kind, SORHTA_REQUEST_WRITE);
-+		//printk(KERN_ALERT "SORHTA request waiting set request\n");
-+	}
-+
-+	while(atomic_read(&req->result[0]) != val) {
-+		atomic_set(&req->result[0], val);
-+		//printk(KERN_ALERT "SORHTA request waiting set value\n");
-+	}
-+    
-+    // Make sure all writes to the request are visible before updating status
-+    smp_wmb();
-+    // status
-+	do {
-+    	writel(SORHTA_REQUEST_VALID, (void __iomem*)&req->status);
-+		status = atomic_read(&req->status);
-+	} while (status != SORHTA_REQUEST_VALID &&  status != SORHTA_REQUEST_TAKEN && status != SORHTA_REQUEST_COMPLETED && status != SORHTA_REQUEST_FAILED);
-+    
-+	dsb(sy);
-+    
-+    // printk(KERN_ALERT "CPU %d: Request submitted - addr: 0x%llx, status ptr: 0x%lx status: %d\n", 
-+    //         cpu_id, (unsigned long long)address, (unsigned long)&req->status, atomic_read(&req->status));
-+    
-+    // Wait for request to be taken by worker
-+    while(atomic_read(&req->status) == SORHTA_REQUEST_VALID) {
-+        cpu_relax();  // Reduce CPU usage in tight loop
-+        //printk(KERN_ALERT "SORHTA request waiting\n");
-+        // Optional: add timeout logic
-+        // if (++timeout_counter > MAX_TIMEOUT) {
-+        //     printk(KERN_WARNING "SORHTA request timed out\n");
-+        //     return 0xFFFFFFFF;  // or appropriate error value
-+        // }
-+    }
-+    
-+    // Wait for request to be completed
-+    while(atomic_read(&req->status) != SORHTA_REQUEST_COMPLETED) {
-+        cpu_relax();  // Reduce CPU usage in tight loop
-+        //printk(KERN_ALERT "SORHTA request waiting for completed, CPU Online: %d, request_buf_size: %lx status: %d\n", cpu_online(0x1), readq(&req->buf_size), atomic_read(&req->status) );
-+        // Check for failure
-+        if (atomic_read(&req->status) == SORHTA_REQUEST_FAILED || atomic_read(&req->status) != SORHTA_REQUEST_TAKEN) {
-+            //  printk(KERN_ALERT "CPU %d: Request Failed - addr: 0x%llx, status ptr: 0x%lx buf_addr: 0x%lx req_kind: %d req_kind2: %d\n", 
-+			//  	cpu_id, (unsigned long long)address, (unsigned long)&req->status, readq(&req->buf_addr), readl(&req->result[0]), readl(&req->kind));
-+            atomic_set(&req->status, SORHTA_REQUEST_NONE);
-+            dsb(sy);
-+            return;  // or appropriate error value
-+        }
-+        
-+        // Optional: add additional timeout logic here
-+    }
-+    
-+    atomic_set(&req->status, SORHTA_REQUEST_NONE);
-+}
-+
-+static inline void write_many(void __iomem *addr, void* from, size_t len) {
-+	int cpu_id = raw_smp_processor_id();
-+    struct sorhta_request __iomem *req = &sorhta_requests[cpu_id];
-+    u64 address = translate_el1((u64)addr);
-+    size_t counter;
-+    
-+    // Initialize the request
-+	// writel((u32)(address & 0xFFFFFFFF), (&req->buf_addr)+4);
-+	// writel((u32)(address >> 32), &req->buf_addr);
-+	while(readq(&req->buf_addr) != address) {
-+		atomic_long_set(&req->buf_addr, address);
-+	}
-+	//writeq(address,(void __iomem*) &req->buf_addr);
-+    //req->buf_addr = address;
-+	while(readq(&req->buf_size) != len) {
-+		atomic_long_set(&req->buf_size, len);
-+	}
-+	
-+	//writel((u32)(1),(void __iomem*) &req->buf_size);
-+    //req->buf_size = 1;  // Reading one u32 value
-+	while(atomic_read(&req->kind) != SORHTA_REQUEST_WRITE){
-+		atomic_set(&req->kind, SORHTA_REQUEST_WRITE);
-+	}
-+	//writel((u32)SORHTA_REQUEST_READ,(void __iomem*) &req->kind);
-+    //req->kind = SORHTA_REQUEST_READ;  // Match the constant used in Rust code
-+    
-+    // Clear any previous result
-+    //memset(req->result, 0, sizeof(req->result));
-+	for(counter = 0; counter < len; counter ++) {
-+		while(atomic_read(&req->result[counter]) != ((u32*)from)[counter]){
-+			atomic_set(&req->result[counter], ((u32*)from)[counter]);
-+		}
-+	}
-+    
-+    // Make sure all writes to the request are visible before updating status
-+    smp_wmb();
-+    
-+    // Set request as valid - use atomic_set for writing
-+    //atomic_set(&req->status, SORHTA_REQUEST_VALID);  // Match the constant used in Rust code
-+	writel(SORHTA_REQUEST_VALID, (void __iomem*)&req->status);
-+    // printk(KERN_INFO "CPU %d: Request submitted - addr: 0x%llx, status ptr: 0x%lx buf_addr: 0x%lx req_kind: %d\n", 
-+	// 	cpu_id, (unsigned long long)address, (unsigned long)&req->status, readq(&req->buf_addr), readl(&req->kind));
-+    // Ensure status update is visible to all cores
-+    dsb(sy);
-+    
-+    // printk(KERN_INFO "CPU %d: Request submitted - addr: 0x%llx, status ptr: 0x%lx\n", 
-+    //        cpu_id, (unsigned long long)address, (unsigned long)&req->status);
-+    
-+    // Wait for request to be taken by worker
-+    while(atomic_read(&req->status) == SORHTA_REQUEST_VALID) {
-+        cpu_relax();  // Reduce CPU usage in tight loop
-+        
-+        // Optional: add timeout logic
-+        // if (++timeout_counter > MAX_TIMEOUT) {
-+        //     printk(KERN_WARNING "SORHTA request timed out\n");
-+        //     return 0xFFFFFFFF;  // or appropriate error value
-+        // }
-+    }
-+    
-+    // Wait for request to be completed
-+    while(atomic_read(&req->status) != SORHTA_REQUEST_COMPLETED) {
-+        cpu_relax();  // Reduce CPU usage in tight loop
-+        
-+        // Check for failure
-+        if (atomic_read(&req->status) == SORHTA_REQUEST_FAILED) {
-+            // printk(KERN_INFO "CPU %d: Request Failed - addr: 0x%llx, status ptr: 0x%lx buf_addr: 0x%lx req_kind: %d req_kind2: %d\n", 
-+			// 	cpu_id, (unsigned long long)address, (unsigned long)&req->status, readq(&req->buf_addr), readl(&req->result[0]), readl(&req->kind));
-+            atomic_set(&req->status, SORHTA_REQUEST_NONE);
-+            dsb(sy);
-+            return; // or appropriate error value
-+        }
-+        
-+        // Optional: add additional timeout logic here
-+    }
-+    
-+    // Read the result
-+    //result = atomic_read(&req->result[0]);
-+    
-+    // Mark request as finished
-+    atomic_set(&req->status, SORHTA_REQUEST_NONE);
-+    
-+    // Ensure status update is visible
-+    dsb(sy);
-+    
-+    //return result;
++	secv_write_le(val, addr);
  }
  
  static u32 flexcan_get_timestamp(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	unsigned long flags;
- 	u32 timestamp;
+@@ -550,6 +583,145 @@ static u32 flexcan_get_timestamp(struct flexcan_priv *priv)
+ 	return timestamp << 16;
+ }
  
-@@ -552,7 +872,7 @@ static u32 flexcan_get_timestamp(struct flexcan_priv *priv)
- 
++/* SECV: Memory barrier helpers for OP-TEE */
++static inline void secv_wmb(void)
++{
++    asm volatile ("dmb st" : : : "memory");
++}
++
++static inline void secv_rmb(void)
++{
++    asm volatile ("dmb ld" : : : "memory");
++}
++
++
++static inline void secv_dsb(void)
++{
++    asm volatile ("dsb sy" : : : "memory");
++}
++
++// SECV: handle an IPI/SGI from the SSMe
++static void secv_ipi_handler(void* dev_id) {
++	// Handle the SGI from SSMe. 
++	u32 interface_index;
++	struct flexcan_priv* nw_priv;
++	struct secv_flexcan_priv *priv;
++	unsigned long flags;
++	u32 tx_count;
++	u64 interrupts_bitmap;
++	struct secv_tx_ring_buffers *local_tx_ring;
++	struct net_device* dev;
++	struct tx_mb* tx_mb;
++	struct net_device_stats *stats; 
++
++	struct secv_rx_ring_buffers *local_rx_ring, *global_rx_ring;
++	struct rx_mb* rx_mb;
++	u32 rx_count;
++	u32 ret, recvd;
++	struct secv_can_buffer_rec *rec;
++	void* addr;
++	void* base;
++
++	//printk(KERN_ALERT "Handling SGI from SSMe\n");
++
++	for(interface_index=0; interface_index < NUM_FLEXCAN_INTERFACES; interface_index++) {
++		dev = secv_flexcan_devs[interface_index];
++		stats = &dev->stats;
++		nw_priv = netdev_priv(dev);
++		priv = secv_flexcan_privs[interface_index];
++		
++		secv_rmb();
++		interrupts_bitmap = priv->interrupts_bitmap;
++
++		if(interrupts_bitmap == 0) {
++			//printk(KERN_ALERT "Skipping interface %d as its bitmap is not set %lx\n", interface_index, (unsigned long)&priv->interrupts_bitmap);
++			continue;
++		}
++		
++		if((interrupts_bitmap & (1 << SECV_SEND_COMPLETE_BIT_IDX)) != 0) {
++
++			spin_lock_irqsave(&secv_xmit_locks[interface_index], flags);
++
++			local_tx_ring = &secv_local_flexcan_tx_rings[interface_index];
++
++			for(tx_count = 0; tx_count < local_tx_ring->count; tx_count++) {
++				tx_mb = &local_tx_ring->mbs[tx_count];
++				stats->tx_bytes += can_rx_offload_get_echo_skb_queue_timestamp(&nw_priv->offload, tx_count,
++								    tx_mb->can_ctrl_tx << 16, NULL);
++				stats->tx_packets++;
++				addr = phys_to_virt(tx_mb->data);
++				base = (void*)((size_t)addr & ~((size_t)0xFFF));
++				size_t bit = ((char*)addr - (char*)base - sizeof(struct secv_can_buffer_rec))/32;
++				long rec_flags;
++				rec = (struct secv_can_buffer_rec*)base;
++				spin_lock_irqsave(&rec->lock, rec_flags);
++				rec->available &= ~((size_t)1 << bit);
++				spin_unlock_irqrestore(&rec->lock, rec_flags);
++			}
++			
++			memset(&secv_local_flexcan_tx_rings[interface_index], 0, sizeof(struct secv_tx_ring_buffers));
++
++			if(tx_pending[interface_index] != 0) {
++				memcpy((void*)&local_tx_ring->mbs[0], &secv_leftover_tx_mbs[interface_index], sizeof(struct tx_mb));
++				local_tx_ring->count++;
++				tx_pending[interface_index] = 0;
++				memset(&secv_leftover_tx_mbs[interface_index], 0, sizeof(struct tx_mb));
++				secv_wmb();
++				mod_timer(&secv_tx_timers[interface_index], jiffies + msecs_to_jiffies(SECV_QUEUE_WAIT_MS));
++			}
++
++			netif_wake_queue(dev);
++
++			secv_rmb();
++			priv->interrupts_bitmap &= ~(1 << SECV_SEND_COMPLETE_BIT_IDX);
++			secv_wmb();
++
++			waiting_tx_complete[interface_index] = 0;
++
++			spin_unlock_irqrestore(&secv_xmit_locks[interface_index], flags);
++			
++		} else if((interrupts_bitmap & (1 << SECV_RECV_BIT_IDX)) != 0) {
++			spin_lock_irqsave(&secv_recv_locks[interface_index], flags);
++
++			//printk(KERN_ALERT "Working on Flexcan Rx\n");
++			local_rx_ring = &secv_local_flexcan_rx_rings[interface_index];
++			global_rx_ring = secv_flexcan_rx_rings[interface_index];
++
++			//printk(KERN_ALERT "Flexcan Rx on interface %d, %lx %lx %lx\n", interface_index, (unsigned long)global_rx_ring, (unsigned long)local_rx_ring, (unsigned long)global_rx_ring->count);
++			rx_count = global_rx_ring->count;
++			local_rx_ring->count = rx_count;
++			recvd = 0;
++			
++			memcpy((void*)&local_rx_ring->mbs[0], (void*)&global_rx_ring->mbs[0], rx_count*sizeof(struct rx_mb));
++			//printk(KERN_ALERT "Offloading Flexcan Rx");
++			for(int i=0; i<rx_count; i++) {
++				//printk(KERN_ALERT "Offloading a CAN message with ID: %u %u\n", global_rx_ring->mbs[i].can_id, local_rx_ring->mbs[i].can_ctrl);
++				ret = secv_can_rx_offload_irq_offload_timestamp(&nw_priv->offload, &local_rx_ring->mbs[i]);
++				if(!ret) {
++					//printk(KERN_ALERT "Nothing offloaded.\n");
++					break;
++				}
++				recvd = 1;
++			}
++
++			secv_rmb();
++			priv->interrupts_bitmap &= ~(1 << SECV_RECV_BIT_IDX);
++			secv_wmb();
++
++			spin_unlock_irqrestore(&secv_recv_locks[interface_index], flags);
++
++			if(recvd) {
++				can_rx_offload_irq_finish(&nw_priv->offload);
++			}
++
++		} else {
++			// something went wrong
++			panic("Wrong bits set for SECV Flexcan interrupt?");
++		}
++	}
++
++}
++
  static struct flexcan_mb __iomem *flexcan_get_mb(const struct flexcan_priv *priv,
  						 u8 mb_index)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	u8 bank_size;
- 	bool bank;
+ {
+@@ -853,11 +1025,49 @@ static netdev_tx_t flexcan_start_xmit(struct sk_buff *skb, struct net_device *de
+ 	u32 data;
+ 	u32 ctrl = FLEXCAN_MB_CODE_TX_DATA | ((can_fd_len2dlc(cfd->len)) << 16);
+ 	int i;
++	unsigned long flags;
++
++	// SECV:
++	u32 interface_index;
++	struct secv_flexcan_priv *secv_priv;
++	struct secv_tx_ring_buffers *local_tx_ring, *global_tx_ring;
++	struct tx_mb* mb;
++	u32 tx_index;
++	u32 actual_send;
++
++	// SECV: Get the interface index
++	interface_index = get_interface_index(priv->regs);
++	//printk(KERN_ALERT "transmitting on interface: %d\n", interface_index);
++	if(interface_index != 0 && interface_index != 1) {
++		netdev_err(dev, "Invalid interface index: %u\n", interface_index);
++		return NETDEV_TX_OK;
++	}
++
++	//printk(KERN_ALERT "Scheduling for transmission\n");
++	spin_lock_irqsave(&secv_xmit_locks[interface_index], flags);
  
-@@ -570,7 +890,7 @@ static struct flexcan_mb __iomem *flexcan_get_mb(const struct flexcan_priv *priv
+-	if (can_dev_dropped_skb(dev, skb))
++	if (can_dev_dropped_skb(dev, skb)){
++		//printk(KERN_ALERT "SKB dropped\n");
++		spin_unlock_irqrestore(&secv_xmit_locks[interface_index], flags);
+ 		return NETDEV_TX_OK;
++	}
+ 
+-	netif_stop_queue(dev);
++	
++
++	// SECV: transmission, do we have space in the TX ring buffer?
++	if(!waiting_tx_complete[interface_index]){
++		local_tx_ring = &secv_local_flexcan_tx_rings[interface_index];
++		tx_index = local_tx_ring->count;
++		local_tx_ring->count++;
++
++		actual_send = 0;
++		if (local_tx_ring->count == NUM_TX_BUFFERS) {
++			actual_send = 1;
++			netif_stop_queue(dev);
++		}
++	} else {
++		netif_stop_queue(dev);
++	}
+ 
+ 	if (cfd->can_id & CAN_EFF_FLAG) {
+ 		can_id = cfd->can_id & CAN_EFF_MASK;
+@@ -876,24 +1086,65 @@ static netdev_tx_t flexcan_start_xmit(struct sk_buff *skb, struct net_device *de
+ 			ctrl |= FLEXCAN_MB_CNT_BRS;
+ 	}
+ 
+-	for (i = 0; i < cfd->len; i += sizeof(u32)) {
+-		data = be32_to_cpup((__be32 *)&cfd->data[i]);
+-		priv->write(data, &priv->tx_mb->data[i / sizeof(u32)]);
+-	}
++	//memcpy(mb->data, cfd->data, sizeof(*cfd));
+ 
+-	can_put_echo_skb(skb, dev, 0, 0);
++	// for (i = 0; i < cfd->len; i += sizeof(u32)) {
++	// 	data = be32_to_cpup((__be32 *)&cfd->data[i]);
++	// 	priv->write(data, &priv->tx_mb->data[i / sizeof(u32)]);
++	// }
+ 
+-	priv->write(can_id, &priv->tx_mb->can_id);
+-	priv->write(ctrl, &priv->tx_mb->can_ctrl);
++	// SECV: put this frame at tx_index, it will be dequeued
++	// when SSMe signals end of transmission.
++	if(!waiting_tx_complete[interface_index]) {
++		mb = &local_tx_ring->mbs[tx_index];
++		mb->can_id = can_id;
++		mb->can_ctrl = ctrl;
++		mb->data = (struct canfd_frame*)(*((u64*)&cfd->data[0]));
+ 
+-	/* Errata ERR005829 step8:
+-	 * Write twice INACTIVE(0x8) code to first MB.
+-	 */
+-	priv->write(FLEXCAN_MB_CODE_TX_INACTIVE,
+-		    &priv->tx_mb_reserved->can_ctrl);
+-	priv->write(FLEXCAN_MB_CODE_TX_INACTIVE,
+-		    &priv->tx_mb_reserved->can_ctrl);
++		//printk(KERN_ALERT "Queueing CAN ID: %x CAN CTRL: %x data: %lx\n", mb->can_id, mb->can_ctrl, (unsigned long)mb->data);
++
++		can_put_echo_skb(skb, dev, tx_index, 0);
++	
++
++		// priv->write(can_id, &priv->tx_mb->can_id);
++		// priv->write(ctrl, &priv->tx_mb->can_ctrl);
++
++		/* Errata ERR005829 step8:
++		* Write twice INACTIVE(0x8) code to first MB.
++		*/
++		// priv->write(FLEXCAN_MB_CODE_TX_INACTIVE,
++		// 	    &priv->tx_mb_reserved->can_ctrl);
++		// priv->write(FLEXCAN_MB_CODE_TX_INACTIVE,
++		// 	    &priv->tx_mb_reserved->can_ctrl);
++		//printk(KERN_ALERT "Scheduling CAN message for sending\n");
++		if(actual_send) {
++			// SECV: trigger transmission, set tx_complete waiting flag
++			//printk(KERN_ALERT "Sending CAN %d messages\n", local_tx_ring->count);
++
++
++			global_tx_ring = secv_flexcan_tx_rings[interface_index];
++			global_tx_ring->count = local_tx_ring->count;
++
++			memcpy((void*)&global_tx_ring->mbs[0], (void*)&local_tx_ring->mbs[0], sizeof(struct tx_mb)*local_tx_ring->count);
++
++			waiting_tx_complete[interface_index] = 1;
++			del_timer(&secv_tx_timers[interface_index]);
+ 
++			secv_dsb();
++			secv_flexcan_trigger_tx(interface_index);
++		}else if(tx_index == 0) {
++			//printk(KERN_ALERT "Setting timer to wait for more messages\n");
++			mod_timer(&secv_tx_timers[interface_index], jiffies + msecs_to_jiffies(SECV_QUEUE_WAIT_MS));
++		}
++	} else {
++		mb = &secv_leftover_tx_mbs[interface_index];
++		mb->can_id = can_id;
++		mb->can_ctrl = ctrl;
++		mb->data = (struct canfd_frame*)(*((u64*)&cfd->data[0]));
++		tx_pending[interface_index] = 1;
++	}
++
++	spin_unlock_irqrestore(&secv_xmit_locks[interface_index], flags);
+ 	return NETDEV_TX_OK;
  }
  
- static int flexcan_low_power_enter_ack(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	unsigned int timeout = FLEXCAN_TIMEOUT_US / 10;
- 
-@@ -584,7 +904,7 @@ static int flexcan_low_power_enter_ack(struct flexcan_priv *priv)
- }
- 
- static int flexcan_low_power_exit_ack(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	unsigned int timeout = FLEXCAN_TIMEOUT_US / 10;
- 
-@@ -598,7 +918,7 @@ static int flexcan_low_power_exit_ack(struct flexcan_priv *priv)
- }
- 
- static void flexcan_enable_wakeup_irq(struct flexcan_priv *priv, bool enable)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg_mcr;
- 
-@@ -613,7 +933,7 @@ static void flexcan_enable_wakeup_irq(struct flexcan_priv *priv, bool enable)
- }
- 
- static int flexcan_stop_mode_enable_scfw(struct flexcan_priv *priv, bool enabled)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	u8 idx = priv->scu_idx;
- 	u32 rsrc_id, val;
- 
-@@ -630,7 +950,7 @@ static int flexcan_stop_mode_enable_scfw(struct flexcan_priv *priv, bool enabled
- }
- 
- static inline int flexcan_enter_stop_mode(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg_mcr;
- 	int ret;
-@@ -653,7 +973,7 @@ static inline int flexcan_enter_stop_mode(struct flexcan_priv *priv)
- }
- 
- static inline int flexcan_exit_stop_mode(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg_mcr;
- 	int ret;
-@@ -676,7 +996,7 @@ static inline int flexcan_exit_stop_mode(struct flexcan_priv *priv)
- }
- 
- static inline void flexcan_error_irq_enable(const struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg_ctrl = (priv->reg_ctrl_default | FLEXCAN_CTRL_ERR_MSK);
- 
-@@ -684,7 +1004,7 @@ static inline void flexcan_error_irq_enable(const struct flexcan_priv *priv)
- }
- 
- static inline void flexcan_error_irq_disable(const struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg_ctrl = (priv->reg_ctrl_default & ~FLEXCAN_CTRL_ERR_MSK);
- 
-@@ -692,7 +1012,7 @@ static inline void flexcan_error_irq_disable(const struct flexcan_priv *priv)
- }
- 
- static int flexcan_clks_enable(const struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	int err = 0;
- 
- 	if (priv->clk_ipg) {
-@@ -711,13 +1031,13 @@ static int flexcan_clks_enable(const struct flexcan_priv *priv)
- }
- 
- static void flexcan_clks_disable(const struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	clk_disable_unprepare(priv->clk_per);
- 	clk_disable_unprepare(priv->clk_ipg);
- }
- 
- static inline int flexcan_transceiver_enable(const struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	if (!priv->reg_xceiver)
- 		return 0;
- 
-@@ -725,7 +1045,7 @@ static inline int flexcan_transceiver_enable(const struct flexcan_priv *priv)
- }
- 
- static inline int flexcan_transceiver_disable(const struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	if (!priv->reg_xceiver)
- 		return 0;
- 
-@@ -733,7 +1053,7 @@ static inline int flexcan_transceiver_disable(const struct flexcan_priv *priv)
- }
- 
- static int flexcan_chip_enable(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg;
- 
-@@ -745,19 +1065,21 @@ static int flexcan_chip_enable(struct flexcan_priv *priv)
- }
- 
- static int flexcan_chip_disable(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg;
--
-+	//printk(KERN_ALERT "before read: %s\n", __FUNCTION__);
- 	reg = priv->read(&regs->mcr);
-+	//printk(KERN_ALERT "after read: %s\n", __FUNCTION__);
- 	reg |= FLEXCAN_MCR_MDIS;
- 	priv->write(reg, &regs->mcr);
-+	//printk(KERN_ALERT "after write: %s\n", __FUNCTION__);
- 
- 	return flexcan_low_power_enter_ack(priv);
- }
- 
- static int flexcan_chip_freeze(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	unsigned int timeout;
- 	u32 bitrate = priv->can.bittiming.bitrate;
-@@ -782,7 +1104,7 @@ static int flexcan_chip_freeze(struct flexcan_priv *priv)
- }
- 
- static int flexcan_chip_unfreeze(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	unsigned int timeout = FLEXCAN_TIMEOUT_US / 10;
- 	u32 reg;
-@@ -801,7 +1123,7 @@ static int flexcan_chip_unfreeze(struct flexcan_priv *priv)
- }
- 
- static int flexcan_chip_softreset(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	unsigned int timeout = FLEXCAN_TIMEOUT_US / 10;
- 
-@@ -817,7 +1139,7 @@ static int flexcan_chip_softreset(struct flexcan_priv *priv)
- 
- static int __flexcan_get_berr_counter(const struct net_device *dev,
- 				      struct can_berr_counter *bec)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	const struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg = priv->read(&regs->ecr);
-@@ -830,7 +1152,7 @@ static int __flexcan_get_berr_counter(const struct net_device *dev,
- 
- static int flexcan_get_berr_counter(const struct net_device *dev,
- 				    struct can_berr_counter *bec)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	const struct flexcan_priv *priv = netdev_priv(dev);
- 	int err;
- 
-@@ -846,7 +1168,7 @@ static int flexcan_get_berr_counter(const struct net_device *dev,
- }
- 
- static netdev_tx_t flexcan_start_xmit(struct sk_buff *skb, struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	const struct flexcan_priv *priv = netdev_priv(dev);
- 	struct canfd_frame *cfd = (struct canfd_frame *)skb->data;
- 	u32 can_id;
-@@ -898,7 +1220,7 @@ static netdev_tx_t flexcan_start_xmit(struct sk_buff *skb, struct net_device *de
- }
- 
- static irqreturn_t flexcan_irq_bus_err(int irq, void *dev_id)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_id;
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
-@@ -973,7 +1295,8 @@ static irqreturn_t flexcan_irq_bus_err(int irq, void *dev_id)
- }
- 
- static irqreturn_t flexcan_irq_state(int irq, void *dev_id)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
-+	printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_id;
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
-@@ -1082,9 +1405,9 @@ static irqreturn_t flexcan_irq_state(int irq, void *dev_id)
- }
- 
- static inline u64 flexcan_read64_mask(struct flexcan_priv *priv, void __iomem *addr, u64 mask)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	u64 reg = 0;
--
-+	//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	if (upper_32_bits(mask))
- 		reg = (u64)priv->read(addr - 4) << 32;
- 	if (lower_32_bits(mask))
-@@ -1094,7 +1417,7 @@ static inline u64 flexcan_read64_mask(struct flexcan_priv *priv, void __iomem *a
- }
- 
- static inline void flexcan_write64(struct flexcan_priv *priv, u64 val, void __iomem *addr)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	if (upper_32_bits(val))
- 		priv->write(upper_32_bits(val), addr - 4);
- 	if (lower_32_bits(val))
-@@ -1102,24 +1425,24 @@ static inline void flexcan_write64(struct flexcan_priv *priv, u64 val, void __io
- }
- 
- static inline u64 flexcan_read_reg_iflag_rx(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	return flexcan_read64_mask(priv, &priv->regs->iflag1, priv->rx_mask);
- }
- 
- static inline u64 flexcan_read_reg_iflag_tx(struct flexcan_priv *priv)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	return flexcan_read64_mask(priv, &priv->regs->iflag1, priv->tx_mask);
- }
- 
- static inline struct flexcan_priv *rx_offload_to_priv(struct can_rx_offload *offload)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
+@@ -1116,6 +1367,73 @@ static inline struct flexcan_priv *rx_offload_to_priv(struct can_rx_offload *off
  	return container_of(offload, struct flexcan_priv, offload);
  }
  
++/**
++ * SECV: offload an rx_mb received from SSMe.
++ */
++static struct sk_buff *secv_flexcan_mailbox_read(struct can_rx_offload *offload,
++						void* mb, u32* timestamp, bool drop)
++{
++	struct sk_buff* skb;
++	struct canfd_frame* cfd;
++	u32 reg_ctrl;
++	u32 reg_id, i;
++	struct rx_mb* rx_mb = (struct rx_mb*)mb;
++	struct flexcan_priv *priv = rx_offload_to_priv(offload);
++	u32 *data_ptr;
++
++	reg_ctrl = rx_mb->can_ctrl;
++
++	if (unlikely(drop)) {
++		skb = ERR_PTR(-ENOBUFS);
++		goto done;
++	}
++
++	//printk(KERN_ALERT "Reading the mailbox for real\n");
++	if (rx_mb->can_ctrl & FLEXCAN_MB_CNT_EDL)
++		skb = alloc_canfd_skb(offload->dev, &cfd);
++	else
++		skb = alloc_can_skb(offload->dev, (struct can_frame **)&cfd);
++	
++	if (unlikely(!skb)) {
++		//printk(KERN_ALERT "Couldnt allocate SKB\n");
++		skb = ERR_PTR(-ENOMEM);
++		goto done;
++	}
++
++	/* increase timstamp to full 32 bit */
++	*timestamp = reg_ctrl << 16;
++
++	reg_id = rx_mb->can_id;
++	if (reg_ctrl & FLEXCAN_MB_CNT_IDE)
++		cfd->can_id = ((reg_id >> 0) & CAN_EFF_MASK) | CAN_EFF_FLAG;
++	else
++		cfd->can_id = (reg_id >> 18) & CAN_SFF_MASK;
++
++	if (reg_ctrl & FLEXCAN_MB_CNT_EDL) {
++		cfd->len = can_fd_dlc2len((reg_ctrl >> 16) & 0xf);
++
++		if (reg_ctrl & FLEXCAN_MB_CNT_BRS)
++			cfd->flags |= CANFD_BRS;
++	} else {
++		cfd->len = can_cc_dlc2len((reg_ctrl >> 16) & 0xf);
++
++		if (reg_ctrl & FLEXCAN_MB_CNT_RTR)
++			cfd->can_id |= CAN_RTR_FLAG;
++	}
++
++	if (reg_ctrl & FLEXCAN_MB_CNT_ESI)
++		cfd->flags |= CANFD_ESI;
++
++	for (i = 0; i < cfd->len; i += sizeof(u32)) {
++		data_ptr = (u32*)(rx_mb->data.data + i);
++		__be32 data = cpu_to_be32(*data_ptr);
++		*(__be32 *)(cfd->data + i) = data;
++	}
++	//printk(KERN_ALERT "Finished offloading CAN ID: %x CAN CTRL: %x\n", cfd->can_id, reg_ctrl);
++done:
++	return skb;
++}
++
  static struct sk_buff *flexcan_mailbox_read(struct can_rx_offload *offload,
  					    unsigned int n, u32 *timestamp,
  					    bool drop)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = rx_offload_to_priv(offload);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	struct flexcan_mb __iomem *mb;
-@@ -1129,7 +1452,9 @@ static struct sk_buff *flexcan_mailbox_read(struct can_rx_offload *offload,
- 	int i;
- 	unsigned long flags;
+@@ -1506,6 +1824,8 @@ static int flexcan_rx_offload_setup(struct net_device *dev)
+ 	priv->tx_mask = FLEXCAN_IFLAG_MB(priv->tx_mb_idx);
  
-+	//printk(KERN_ALERT "reading flexcan mb\n");
- 	mb = flexcan_get_mb(priv, n);
-+	//printk(KERN_ALERT "finished reading flexcan mb\n");
+ 	priv->offload.mailbox_read = flexcan_mailbox_read;
++	// SECV: set the read function.
++	priv->offload.secv_mailbox_read = secv_flexcan_mailbox_read;
  
- 	spin_lock_irqsave(&priv->timer_access, flags);
  	if (priv->devtype_data.quirks & FLEXCAN_QUIRK_USE_RX_MAILBOX) {
-@@ -1222,7 +1547,7 @@ static struct sk_buff *flexcan_mailbox_read(struct can_rx_offload *offload,
- }
- 
- static irqreturn_t flexcan_irq_mailbox(int irq, void *dev_id)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_id;
- 	struct net_device_stats *stats = &dev->stats;
- 	struct flexcan_priv *priv = netdev_priv(dev);
-@@ -1293,7 +1618,7 @@ static irq_handler_t flexcan_irq_handlers[] = {
- };
- 
- static void flexcan_set_bittiming_ctrl(const struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	const struct flexcan_priv *priv = netdev_priv(dev);
- 	const struct can_bittiming *bt = &priv->can.bittiming;
- 	struct flexcan_regs __iomem *regs = priv->regs;
-@@ -1321,7 +1646,7 @@ static void flexcan_set_bittiming_ctrl(const struct net_device *dev)
- }
- 
- static void flexcan_set_bittiming_cbt(const struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	struct can_bittiming *bt = &priv->can.bittiming;
- 	struct can_bittiming *dbt = &priv->can.data_bittiming;
-@@ -1427,7 +1752,7 @@ static void flexcan_set_bittiming_cbt(const struct net_device *dev)
- }
- 
- static void flexcan_set_bittiming(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	const struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg;
-@@ -1453,7 +1778,7 @@ static void flexcan_set_bittiming(struct net_device *dev)
- }
- 
- static void flexcan_ram_init(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg_ctrl2;
-@@ -1480,7 +1805,7 @@ static void flexcan_ram_init(struct net_device *dev)
- }
- 
- static int flexcan_rx_offload_setup(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	int err;
- 
-@@ -1525,7 +1850,7 @@ static int flexcan_rx_offload_setup(struct net_device *dev)
- }
- 
- static void flexcan_chip_interrupts_enable(const struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	const struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u64 reg_imask;
-@@ -1544,7 +1869,7 @@ static void flexcan_chip_interrupts_enable(const struct net_device *dev)
- }
- 
- static void flexcan_chip_interrupts_disable(const struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	const struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 
-@@ -1560,7 +1885,7 @@ static void flexcan_chip_interrupts_disable(const struct net_device *dev)
-  *
-  */
- static int flexcan_chip_start(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg_mcr, reg_ctrl, reg_ctrl2, reg_mecr;
-@@ -1799,7 +2124,7 @@ static int flexcan_chip_start(struct net_device *dev)
-  * this function is entered with clocks enabled
-  */
- static int __flexcan_chip_stop(struct net_device *dev, bool disable_on_error)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	int err;
- 
-@@ -1822,17 +2147,17 @@ static int __flexcan_chip_stop(struct net_device *dev, bool disable_on_error)
- }
- 
- static inline int flexcan_chip_stop_disable_on_error(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	return __flexcan_chip_stop(dev, true);
- }
- 
- static inline int flexcan_chip_stop(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	return __flexcan_chip_stop(dev, false);
- }
- 
- static int flexcan_open(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
+ 		priv->offload.mb_first = FLEXCAN_RX_MB_RX_MAILBOX_FIRST;
+@@ -1837,6 +2157,11 @@ static int flexcan_open(struct net_device *dev)
  	int err;
  	u32 i, j, last, irq_array_len = ARRAY_SIZE(flexcan_irq_handlers);
-@@ -1854,8 +2179,9 @@ static int flexcan_open(struct net_device *dev)
- 	err = flexcan_transceiver_enable(priv);
- 	if (err)
- 		goto out_close;
--
-+	//printk(KERN_ALERT "TEEHSM: offload setup\n");
- 	err = flexcan_rx_offload_setup(dev);
-+	//printk(KERN_ALERT "TEEHSM: offload setup end\n");
- 	if (err)
- 		goto out_transceiver_disable;
  
-@@ -1903,7 +2229,7 @@ static int flexcan_open(struct net_device *dev)
++	// SECV: initialize nsec for secv_priv 
++	struct secv_flexcan_priv *secv_priv;
++	u32 interface_index;
++
++
+ 	if ((priv->can.ctrlmode & CAN_CTRLMODE_3_SAMPLES) &&
+ 	    (priv->can.ctrlmode & CAN_CTRLMODE_FD)) {
+ 		netdev_err(dev, "Three Samples mode and CAN-FD mode can't be used together\n");
+@@ -1877,6 +2202,31 @@ static int flexcan_open(struct net_device *dev)
+ 				}
+ 			}
+ 
++	interface_index = get_interface_index(priv->regs);
++	if(interface_index == 0 || interface_index == 1) {
++		secv_priv = secv_flexcan_privs[interface_index];
++		secv_priv->regs = (struct flexcan_regs *)translate_el1(priv->regs);
++		secv_priv->tx_mb = (struct flexcan_mb *)translate_el1(priv->tx_mb);
++		secv_priv->tx_mb_reserved = (struct flexcan_mb *)translate_el1(priv->tx_mb_reserved);
++		secv_priv->interface_index = interface_index;
++		secv_priv->tx_mb_idx = priv->tx_mb_idx;
++		secv_priv->mb_count = priv->mb_count;
++		secv_priv->mb_size = priv->mb_size;
++		secv_priv->rx_mask = priv->rx_mask;
++		secv_priv->tx_mask = priv->tx_mask;
++		secv_priv->quirks = priv->devtype_data.quirks;
++		secv_priv->offload_mb_first = priv->offload.mb_first;
++		secv_priv->offload_mb_last = priv->offload.mb_last;
++		secv_priv->reg_ctrl_default = priv->reg_ctrl_default;
++		secv_priv->nsec_initialized = 1;
++		memset((void*)&secv_local_flexcan_tx_rings[interface_index], 0, sizeof(struct secv_tx_ring_buffers));
++		/** SECV: notify the secure world we have initialized this interface.
++		 *  ATF: trap this SMC call and disable NW access to this interface memory by reconfiguring XRDC for CAN<interface_idx> access control.
++		 *  OPTEE: copy the initialization info from the shared priv to the secure one. 
++		 *  From here on, the shared interface object is only used for sharing state info between NW & SW driver.*/ 
++		secv_flexcan_init_notify(interface_index);
++	}
++
+ 	flexcan_chip_interrupts_enable(dev);
+ 
+ 	netif_start_queue(dev);
+@@ -2187,6 +2537,50 @@ static unsigned long get_per_clk_rate(struct clk *clk)
+ 	return rate;
  }
  
- static int flexcan_close(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	u32 i, j, irq_array_len = ARRAY_SIZE(flexcan_irq_handlers);
- 
-@@ -1927,7 +2253,7 @@ static int flexcan_close(struct net_device *dev)
- }
- 
- static int flexcan_set_mode(struct net_device *dev, enum can_mode mode)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	int err;
- 
- 	switch (mode) {
-@@ -1956,7 +2282,7 @@ static const struct net_device_ops flexcan_netdev_ops = {
- };
- 
- static int register_flexcandev(struct net_device *dev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	struct flexcan_regs __iomem *regs = priv->regs;
- 	u32 reg, err;
-@@ -2080,7 +2406,7 @@ static int flexcan_setup_stop_mode_gpr(struct platform_device *pdev)
- }
- 
- static int flexcan_setup_stop_mode_scfw(struct platform_device *pdev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = platform_get_drvdata(pdev);
- 	struct flexcan_priv *priv;
- 	u8 scu_idx;
-@@ -2203,6 +2529,46 @@ static int flexcan_probe(struct platform_device *pdev)
++static void secv_tx_timer_callback(struct timer_list *t) {
++	// TODO: send the frames we have now.
++	struct secv_tx_ring_buffers *local_tx_ring, *global_tx_ring;
++	u_int32_t count;
++	unsigned long flags;
++
++	u32 interface_index = t == &secv_tx_timers[0]? 0: t == &secv_tx_timers[1] ? 1: -1;
++
++	if(interface_index != 0 && interface_index != 1) {
++		// we have a problem
++		return;
++	}
++	
++	spin_lock_irqsave(&secv_xmit_locks[interface_index], flags);
++	if(!waiting_tx_complete[interface_index]) {
++
++		local_tx_ring = &secv_local_flexcan_tx_rings[interface_index];
++		global_tx_ring = secv_flexcan_tx_rings[interface_index];
++		count = local_tx_ring->count;
++		global_tx_ring->count = count;
++		
++		//printk(KERN_ALERT "SECV timer for transmission has expired with %d messages queued, interface%d\n", count, interface_index);
++
++		memcpy((void*)&global_tx_ring->mbs[0], (void*)&local_tx_ring->mbs[0], sizeof(struct tx_mb)*local_tx_ring->count);
++		//memcpy((void*)global_tx_ring, (void*)&local_tx_ring, sizeof(struct secv_tx_ring_buffers));
++		//secv_dsb();
++
++		// while(count > 0) {
++		// 	//global_tx_ring->mbs[count-1] = local_tx_ring->mbs[count-1];
++		// 	//printk(KERN_ALERT "Message: %x CAN ID %x, %x CAN ctrl %x, %x data ptr: %lx, %lx\n", count, 
++		// 		global_tx_ring->mbs[count-1].can_id, local_tx_ring->mbs[count-1].can_id,
++		// 		global_tx_ring->mbs[count-1].can_ctrl, local_tx_ring->mbs[count-1].can_ctrl,
++		// 		(unsigned long)global_tx_ring->mbs[count-1].data, (unsigned long)local_tx_ring->mbs[count-1].data );
++		// 	count--;
++		// }
++
++		waiting_tx_complete[interface_index] = 1;
++
++		secv_dsb();
++		secv_flexcan_trigger_tx(interface_index);
++	}
++	spin_unlock_irqrestore(&secv_xmit_locks[interface_index], flags);
++}
++
+ static int flexcan_probe(struct platform_device *pdev)
+ {
+ 	const struct of_device_id *of_id;
+@@ -2203,6 +2597,56 @@ static int flexcan_probe(struct platform_device *pdev)
  	u32 i, clock_freq = 0;
  	bool named_irqs;
  
-+	//sorhta
++	// SECV: declarations
 +	struct device_node *rmem_node;
 +	struct reserved_mem *rmem;
-+	phys_addr_t sorhta_shmem_phys_addr;
-+	size_t sorhta_shmem_size;
++	phys_addr_t secv_shmem_phys_addr;
++	size_t secv_shmem_size;
++	u32 interface_index;
 +
-+	// Sorhta shmem
-+	if(sorhta_shmem_virt_addr == NULL) {
-+		rmem_node = of_find_node_by_path("/reserved-memory/sorhta_shmem@E2000000");
-+		if(!rmem_node) {
-+			dev_err(&pdev->dev, "SORHTA shared memory node found\n");
-+			return -ENOMEM;
++	// SECV shared memory mapping
++	if(secv_shmem_virt_addr == NULL) {
++		rmem_node = of_find_node_by_path("/reserved-memory/sorhta_shmem@E0000000");
++		if (!rmem_node) {
++			dev_err(&pdev->dev, "No secv-shmem node found in DT\n");
++			return -ENODEV;
 +		}
++		
 +
 +		rmem = of_reserved_mem_lookup(rmem_node);
-+		if(!rmem) {
-+			of_node_put(rmem_node);
-+			dev_err(&pdev->dev, "SORHTA failed to lookup shared memory node\n");
++		of_node_put(rmem_node);
++		if (!rmem) {
++			dev_err(&pdev->dev, "No reserved memory found for secv-shmem\n");
++			return -ENODEV;
++		}
++
++		secv_shmem_phys_addr = rmem->base;
++		secv_shmem_size = rmem->size;
++
++		secv_shmem_virt_addr = ioremap(secv_shmem_phys_addr, secv_shmem_size);
++		if (!secv_shmem_virt_addr) {
++			dev_err(&pdev->dev, "Failed to ioremap secv-shmem\n");
 +			return -ENOMEM;
 +		}
 +
-+		sorhta_shmem_phys_addr = rmem->base;
-+		sorhta_shmem_size = rmem->size;
++		secv_flexcan_privs[0] = (struct secv_flexcan_priv *)((char*)secv_shmem_virt_addr + SORHTA_PRIV0_BASE_OFF);
++		secv_flexcan_privs[1] = (struct secv_flexcan_priv *)((char*)secv_shmem_virt_addr + SORHTA_PRIV1_BASE_OFF);
 +
-+		sorhta_shmem_virt_addr = ioremap_wt(sorhta_shmem_phys_addr, sorhta_shmem_size);
-+		if(!sorhta_shmem_virt_addr) {
-+			dev_err(&pdev->dev, "Failed to map sorhta shared memory\n");
-+			return -ENOMEM;
-+		}
++		secv_flexcan_rx_rings[0] = (struct secv_rx_ring_buffers *)((char*)secv_shmem_virt_addr + SORHTA_FLEXCAN_RX_SHMEM_BASE0_OFF);
++		secv_flexcan_rx_rings[1] = (struct secv_rx_ring_buffers *)((char*)secv_shmem_virt_addr + SORHTA_FLEXCAN_RX_SHMEM_BASE1_OFF);
 +
-+		sorhta_settings = (struct sorhta_settings*)sorhta_shmem_virt_addr;
-+		if(atomic_read(&sorhta_settings->initialized) == 0) {
-+			dev_err(&pdev->dev, "Sorhta settings not initialized!0x%llx 0x%llx\n", (unsigned long long)sorhta_shmem_virt_addr, (unsigned long long)rmem->base);
-+			return -ENOMEM;
-+		}
++		secv_flexcan_tx_rings[0] = (struct secv_tx_ring_buffers *)((char*)secv_shmem_virt_addr + SORHTA_FLEXCAN_TX_SHMEM_BASE0_OFF);
++		secv_flexcan_tx_rings[1] = (struct secv_tx_ring_buffers *)((char*)secv_shmem_virt_addr + SORHTA_FLEXCAN_TX_SHMEM_BASE1_OFF);
 +
-+		sorhta_requests = (struct sorhta_request*)((char*)sorhta_shmem_virt_addr + 0x10);
-+		printk(KERN_ALERT "SORHTA_REQUESTS address: 0x%llx 0x%llx\n", (unsigned long long)sorhta_requests, (unsigned long long)sorhta_settings->request_memory_base_addr);
++		timer_setup(&secv_tx_timers[0], secv_tx_timer_callback, 0);
++		timer_setup(&secv_tx_timers[1], secv_tx_timer_callback, 0);
++
++		arch_set_secv_ipi_handler(secv_ipi_handler);
++
++		dev_info(&pdev->dev, "SECV shared memory mapped at phys: 0x%pa, virt: %p, size: %zu\n",
++			 &secv_shmem_phys_addr, secv_shmem_virt_addr, secv_shmem_size);
 +	}
 +
  	reg_xceiver = devm_regulator_get_optional(&pdev->dev, "xceiver");
  	if (PTR_ERR(reg_xceiver) == -EPROBE_DEFER)
  		return -EPROBE_DEFER;
-@@ -2224,6 +2590,8 @@ static int flexcan_probe(struct platform_device *pdev)
- 		}
+@@ -2316,7 +2760,9 @@ static int flexcan_probe(struct platform_device *pdev)
+ 		return -EINVAL;
  	}
  
-+	//request_irq(0x2, sorhta_ipi_handler, IRQF_PERCPU, "sorhta-ipi", pdev);
+-	dev = alloc_candev(sizeof(struct flexcan_priv), 1);
++	// SECV: we modify this to allow the echo queue to wait for multiple 
++	// echo queues from the SSMe.
++	dev = alloc_candev(sizeof(struct flexcan_priv), NUM_TX_BUFFERS);
+ 	if (!dev)
+ 		return -ENOMEM;
+ 
+@@ -2399,6 +2845,14 @@ static int flexcan_probe(struct platform_device *pdev)
+ 		dev_info(&pdev->dev, " %d", irq_nos[i]);
+ 	dev_info(&pdev->dev, ")\n");
+ 
++	// SECV: initialize the tx locks and save the dev.
++	// too lazy to find out a better way around this.
++	interface_index = get_interface_index((void*)regs);
++	// TODO: check that interface index is okay. we could have more than 2 interfaces in reality
++	spin_lock_init(&secv_xmit_locks[interface_index]);
++	spin_lock_init(&secv_recv_locks[interface_index]);
++	secv_flexcan_devs[interface_index] = dev;
 +
- 	if (!clock_freq) {
- 		clk_ipg = devm_clk_get(&pdev->dev, "ipg");
- 		if (IS_ERR(clk_ipg)) {
-@@ -2280,6 +2648,7 @@ static int flexcan_probe(struct platform_device *pdev)
- 		for (i = 0; i < devtype_data->n_irqs; i++) {
- 			irq_nos[i] = platform_get_irq_byname(pdev,
- 							     devtype_data->irqs[i].name);
-+			//printk(KERN_ALERT "IRQ by name: %d\n", irq_nos[i]);
- 			if (irq_nos[i] < 0) {
- 				dev_err(&pdev->dev, "no %s irq\n",
- 					devtype_data->irqs[i].name);
-@@ -2289,6 +2658,7 @@ static int flexcan_probe(struct platform_device *pdev)
- 	else
- 		for (i = 0; i < devtype_data->n_irqs; i++) {
- 			irq_nos[i] = platform_get_irq(pdev, i);
-+			//printk(KERN_ALERT "IRQ not named: %d\n", irq_nos[i]);
- 			if (irq_nos[i] <= 0)
- 				return -ENODEV;
- 		}
-@@ -2411,7 +2781,7 @@ static int flexcan_probe(struct platform_device *pdev)
- }
+ 	return 0;
  
- static void flexcan_remove(struct platform_device *pdev)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = platform_get_drvdata(pdev);
- 
- 	device_set_wakeup_enable(&pdev->dev, false);
-@@ -2422,7 +2792,7 @@ static void flexcan_remove(struct platform_device *pdev)
- }
- 
- static int __maybe_unused flexcan_suspend(struct device *device)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_get_drvdata(device);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	int err;
-@@ -2456,7 +2826,7 @@ static int __maybe_unused flexcan_suspend(struct device *device)
- }
- 
- static int __maybe_unused flexcan_resume(struct device *device)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_get_drvdata(device);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 	int err;
-@@ -2491,7 +2861,7 @@ static int __maybe_unused flexcan_resume(struct device *device)
- }
- 
- static int __maybe_unused flexcan_runtime_suspend(struct device *device)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_get_drvdata(device);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 
-@@ -2501,7 +2871,7 @@ static int __maybe_unused flexcan_runtime_suspend(struct device *device)
- }
- 
- static int __maybe_unused flexcan_runtime_resume(struct device *device)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_get_drvdata(device);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 
-@@ -2509,7 +2879,7 @@ static int __maybe_unused flexcan_runtime_resume(struct device *device)
- }
- 
- static int __maybe_unused flexcan_noirq_suspend(struct device *device)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_get_drvdata(device);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 
-@@ -2528,7 +2898,7 @@ static int __maybe_unused flexcan_noirq_suspend(struct device *device)
- }
- 
- static int __maybe_unused flexcan_noirq_resume(struct device *device)
--{
-+{//printk(KERN_ALERT "%s\n", __FUNCTION__);
- 	struct net_device *dev = dev_get_drvdata(device);
- 	struct flexcan_priv *priv = netdev_priv(dev);
- 
-diff --git a/drivers/net/can/flexcan/teehsm.h b/drivers/net/can/flexcan/teehsm.h
+  failed_setup_stop_mode:
+diff --git a/drivers/net/can/flexcan/secv_flexcan.c b/drivers/net/can/flexcan/secv_flexcan.c
 new file mode 100644
-index 000000000000..123c6cab52ee
+index 000000000000..bc8d23286afd
 --- /dev/null
-+++ b/drivers/net/can/flexcan/teehsm.h
-@@ -0,0 +1,495 @@
-+/*******************************************************************************
-+* Copyright (C) 2022-2024 M. Kayondo <kayondo@snu.ac.kr>
-+* This program is free software; you can redistribute it and/or
-+* modify it under the terms of the GNU General Public License
-+* as published by the Free Software Foundation; either version 2
-+* of the License, or (at your option) any later version.
-+*
-+* This program is distributed in the hope that it will be useful,
-+* but WITHOUT ANY WARRANTY; without even the implied warranty of
-+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+* GNU General Public License for more details.
-+*
-+* You should have received a copy of the GNU General Public License
-+* along with this program; If not, see <http://www.gnu.org/licenses/>.
-+*******************************************************************************/
++++ b/drivers/net/can/flexcan/secv_flexcan.c
+@@ -0,0 +1,5 @@
++#include "secv_flexcan.h"
 +
-+#ifndef FEC_HELPERS_H
-+#define FEC_HELPERS_H
++
++
++
+diff --git a/drivers/net/can/flexcan/secv_flexcan.h b/drivers/net/can/flexcan/secv_flexcan.h
+new file mode 100644
+index 000000000000..67b8ed729645
+--- /dev/null
++++ b/drivers/net/can/flexcan/secv_flexcan.h
+@@ -0,0 +1,97 @@
++#ifndef SECV_FLEXCAN_H
++#define SECV_FLEXCAN_H
++
++#include "secv_tee.h"
++#include "flexcan.h"
++
++#define NUM_FLEXCAN_INTERFACES      2
++#define RX_RING_SIZE                512
++#define FRAME_COUNT_PER_MB          16
++#define NUM_TX_BUFFERS              8 // This greatly affects the throughput based on size. Large size (32, 64 bytes) messages benefit from large queue, while small size (8, 16 bytes) suffer with message loss due to it. 
++#define NUM_RX_BUFFERS              FRAME_COUNT_PER_MB * NUM_TX_BUFFERS
++#define MAX_MBS                     128
++
++#define S32_FLEXCAN0_BASE_ADDR          0x401B4000UL
++#define S32_FLEXCAN1_BASE_ADDR          0x401BE000UL
++#define S32_FLEXCAN_SIZE                0xA000UL
++
++#define SECV_SEND_COMPLETE_BIT_IDX		0x0
++#define SECV_RECV_BIT_IDX				0x1
++#define SECV_QUEUE_WAIT_MS              0x1
++
++/**
++ * SECV: this is the reduced state, for device control. shared between the inner kernel & SW driverlet.
++ * For security, this must be stored in the inner kernel region at the NW end.
++ * OK to be read by outer kernel, risky to be written by outer kernel as a compromised 
++ * outer kernel can use it to control the SW driverlet instead.
++ */
++struct secv_flexcan_priv {
++    struct flexcan_regs *regs;
++    struct flexcan_mb   *tx_mb;
++    struct flexcan_mb   *tx_mb_reserved;
++    uint8_t interface_index;
++    uint8_t nsec_initialized;
++    uint8_t sec_initialized;
++    uint8_t tx_mb_idx;
++    uint8_t mb_count;
++    uint8_t mb_size;
++    uint64_t rx_mask;
++    uint64_t tx_mask;
++    uint32_t reg_ctrl_default;
++    uint32_t quirks;
++    uint32_t offload_mb_first;
++    uint32_t offload_mb_last;
++    u_int64_t interrupts_bitmap;
++};
++
++
++struct rx_mb {
++    uint32_t can_ctrl;
++    uint32_t can_id;
++    struct canfd_frame data;
++};
++
++struct tx_mb {
++    uint32_t can_ctrl;
++    uint32_t can_ctrl_tx;
++    uint32_t can_id;
++    struct canfd_frame *data;
++};
++
++struct secv_tx_ring_buffers {
++    struct tx_mb mbs[NUM_TX_BUFFERS];
++    size_t count;
++};
++
++
++struct secv_rx_ring_buffers {
++    struct rx_mb mbs[NUM_RX_BUFFERS];
++    size_t count;
++};
++
++#define SORHTA_PRIV0_BASE_OFF           (PAGE_SIZE)
++#define SORHTA_PRIV1_BASE_OFF           (PAGE_SIZE * 2)
++#define SORHTA_FLEXCAN_RX_SHMEM_BASE0_OFF	(PAGE_SIZE * 3)
++#define SORHTA_FLEXCAN_RX_SHMEM_SIZE0	    ((sizeof(struct secv_rx_ring_buffers) + PAGE_SIZE-1) & ~((size_t)0xFFF))
++#define SORHTA_FLEXCAN_RX_SHMEM_BASE1_OFF	(SORHTA_FLEXCAN_RX_SHMEM_BASE0_OFF + SORHTA_FLEXCAN_RX_SHMEM_SIZE0)
++#define SORHTA_FLEXCAN_RX_SHMEM_SIZE1	    (SORHTA_FLEXCAN_RX_SHMEM_SIZE0)
++
++#define SORHTA_FLEXCAN_TX_SHMEM_BASE0_OFF	(SORHTA_FLEXCAN_RX_SHMEM_BASE1_OFF + SORHTA_FLEXCAN_RX_SHMEM_SIZE1)
++#define SORHTA_FLEXCAN_TX_SHMEM_SIZE0	    ((sizeof(struct secv_tx_ring_buffers) + PAGE_SIZE-1) & ~((size_t)0xFFF))
++#define SORHTA_FLEXCAN_TX_SHMEM_BASE1_OFF	(SORHTA_FLEXCAN_TX_SHMEM_BASE0_OFF + SORHTA_FLEXCAN_TX_SHMEM_SIZE0)
++#define SORHTA_FLEXCAN_TX_SHMEM_SIZE1	    (SORHTA_FLEXCAN_TX_SHMEM_SIZE0)
++
++static inline u32 get_interface_index(void __iomem *regs)
++{
++    char* p = (char*)translate_el1((u64)regs);
++    if(p < (char*)S32_FLEXCAN1_BASE_ADDR && p >= (char*)S32_FLEXCAN0_BASE_ADDR  ) {
++        return 0;
++    } else if(p >= (char*)S32_FLEXCAN1_BASE_ADDR && p < (char*)(S32_FLEXCAN1_BASE_ADDR + S32_FLEXCAN_SIZE) ) {
++        return 1;
++    } 
++
++    return 0xFFFFFFFF;
++}
++
++
++#endif
+\ No newline at end of file
+diff --git a/drivers/net/can/flexcan/secv_tee.h b/drivers/net/can/flexcan/secv_tee.h
+new file mode 100644
+index 000000000000..c217a100792b
+--- /dev/null
++++ b/drivers/net/can/flexcan/secv_tee.h
+@@ -0,0 +1,148 @@
++#ifndef SECV_TEE_H
++#define SECV_TEE_H
 +
 +#include <linux/arm-smccc.h>
 +#include <linux/atomic.h>
++#include <linux/string.h>
++#include <linux/types.h>
 +
-+#define TRAP_TO_EL3
++#define MASK_47_TO_12   0x0000FFFFFFFFF000ULL
++#define MASK_11_TO_0    0x000000000000FFFULL
 +
-+// ----------------------------------------------------------------------------
-+// Address translation helpers
-+// ----------------------------------------------------------------------------
++#define SECV_SHMEM_BASE 0xE2000000ULL
++#define SECV_SHMEM_SIZE 0x2000ULL
 +
-+#ifdef TRAP_TO_EL3
-+
-+#define MASK_47_TO_12 0x0000FFFFFFFFF000ULL
-+#define MASK_11_TO_0 0x0000000000000FFFULL
-+
-+#define SORHTA_SHMEM_BASE	0xE2000000ULL
-+#define SORHTA_SHMEM_SIZE	0x2000ULL
-+
-+#define SORHTA_REQUEST_NONE			0
-+#define SORHTA_REQUEST_VALID		1
-+#define SORHTA_REQUEST_TAKEN		2
-+#define SORHTA_REQUEST_COMPLETED	3
-+#define SORHTA_REQUEST_FAILED		((u32)-1)
-+
-+
-+#define SORHTA_REQUEST_WRITE		1
-+#define SORHTA_REQUEST_READ			2
-+
-+/* This function maps a NW virtual address to a physical address */
++/* Map a NW virtual address to a physical address */
 +__attribute__((always_inline)) static inline u64 translate_el1(u64 virt_addr)
 +{
-+	u64 phys_addr = virt_addr;
-+	asm("AT S1E1R, %[a];"
-+	    "MRS %[a], PAR_EL1;"
-+	    : [a] "+r"(phys_addr));
++    u64 phys_addr = virt_addr;
++    asm("AT S1E1R, %[a];"
++        "MRS %[a], PAR_EL1;"
++        : [a] "+r"(phys_addr));
 +
-+	if ((1 & phys_addr)) {
-+		// translation failed bit
-+		printk(KERN_ALERT
-+		       "EL1 translation fault %llx for addr 0x%llx\n",
-+		       phys_addr, virt_addr);
-+		return phys_addr;
-+	}
-+
-+	phys_addr = (MASK_47_TO_12 & phys_addr) + (MASK_11_TO_0 & virt_addr);
-+	return phys_addr;
++    if((1 & phys_addr)) {
++        //printk(KERN_ALERT "EL1 translation fault %llx for addr 0xllx\n", phys_addr, virt_addr);
++        return phys_addr;
++    }
++    phys_addr = (MASK_47_TO_12 & phys_addr) + (MASK_11_TO_0 & virt_addr);
++    return phys_addr;
 +}
 +
-+#endif
-+
-+// ----------------------------------------------------------------------------
-+// The following routines are made for trapping and emulating access to
-+// protected device peripheral MMIO-mapped memory.
-+// ----------------------------------------------------------------------------
-+
-+#ifdef TRAP_TO_EL3
 +
 +#define OPTEE_SMC_STD_CALL_VAL(func_num) \
-+	ARM_SMCCC_CALL_VAL(ARM_SMCCC_STD_CALL, ARM_SMCCC_SMC_32, \
-+			   ARM_SMCCC_OWNER_TRUSTED_OS, (func_num))
++            ARM_SMCCC_CALL_VAL(ARM_SMCCC_STD_CALL, ARM_SMCCC_SMC_32, \
++                ARM_SMCCC_OWNER_TRUSTED_OS, (func_num))
++
 +#define OPTEE_SMC_FAST_CALL_VAL(func_num) \
-+	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, \
-+			   ARM_SMCCC_OWNER_TRUSTED_OS, (func_num))
-+
-+#define FUNCID_OEN_SHIFT UL(24)
-+#define FUNCID_OEN_MASK UL(0x3f)
-+#define FUNCID_OEN_WIDTH UL(6)
-+
-+#define SMC_TYPE_FAST UL(1)
-+#define SMC_TYPE_YIELD UL(0)
-+
-+#define FUNCID_TYPE_SHIFT UL(31)
-+#define FUNCID_TYPE_MASK UL(0x1)
-+#define FUNCID_TYPE_WIDTH UL(1)
-+
-+#define FUNCID_TYPE (SMC_TYPE_FAST << FUNCID_TYPE_SHIFT)
-+
-+#define FUNCID_PROT_NIC_RAW UL(19)
-+#define FUNCID_PROT_NIC_OEN (FUNCID_PROT_NIC_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_PROT_NIC (FUNCID_PROT_NIC_OEN | FUNCID_TYPE)
-+
-+#define FUNCID_WRITE_32_RAW UL(20)
-+#define FUNCID_WRITE_32_OEN (FUNCID_WRITE_32_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_WRITE_32 (FUNCID_WRITE_32_OEN | FUNCID_TYPE)
-+
-+#define FUNCID_READ_32_RAW UL(21)
-+#define FUNCID_READ_32_OEN (FUNCID_READ_32_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_READ_32 (FUNCID_READ_32_OEN | FUNCID_TYPE)
-+
-+#define FUNCID_TX_TOS_RAW UL(22)
-+#define FUNCID_TX_TOS_OEN (FUNCID_TX_TOS_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_TX_TOS (FUNCID_TX_TOS_OEN | FUNCID_TYPE)
-+
-+#define FUNCID_TX_FRS_RAW UL(23)
-+#define FUNCID_TX_FRS_OEN (FUNCID_TX_FRS_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_TX_FRS (FUNCID_TX_FRS_OEN | FUNCID_TYPE)
-+
-+#define FUNCID_RX_FRS_RAW UL(24)
-+#define FUNCID_RX_FRS_OEN (FUNCID_RX_FRS_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_RX_FRS (FUNCID_RX_FRS_OEN | FUNCID_TYPE)
-+
-+#define FUNCID_RX_TOS_RAW UL(25)
-+#define FUNCID_RX_TOS_OEN (FUNCID_RX_TOS_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_RX_TOS (FUNCID_RX_TOS_OEN | FUNCID_TYPE)
-+
-+#define FUNCID_NOTIFY_WRITE_BE_RAW UL(28)
-+#define FUNCID_NOTIFY_WRITE_BE_OEN (FUNCID_NOTIFY_WRITE_BE_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_NOTIFY_WRITE_BE (FUNCID_NOTIFY_WRITE_BE_OEN | FUNCID_TYPE)
++            ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, \
++                ARM_SMCCC_OWNER_TRUSTED_OS, (func_num))
 +
 +
-+#define FUNCID_NOTIFY_WRITE_LE_RAW UL(20)
-+#define FUNCID_NOTIFY_WRITE_LE_OEN (FUNCID_NOTIFY_WRITE_LE_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_NOTIFY_WRITE_LE (FUNCID_NOTIFY_WRITE_LE_OEN | FUNCID_TYPE)
++#define OPTEE_FUNCID_CAN_INIT_NOTIFY        0xF1
++#define OPTEE_FUNCID_CAN_READ_BE            0xF2
++#define OPTEE_FUNCID_CAN_WRITE_BE           0xF3
++#define OPTEE_FUNCID_CAN_READ_LE            0xF4
++#define OPTEE_FUNCID_CAN_WRITE_LE           0xF5
++#define OPTEE_FUNCID_CAN_TRIGGER_TX         0xF6
++#define OPTEE_FUNCID_CAN_ALLOCATE_BUFFER    0xFC
++#define OPTEE_FUNCID_CAN_FREE_BUFFER        0xFD
 +
++#define OPTEE_SMC_FUNCID_CAN_INIT_NOTIFY OPTEE_FUNCID_CAN_INIT_NOTIFY
++#define OPTEE_SMC_CALL_CAN_INIT_NOTIFY   \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_INIT_NOTIFY)
 +
-+#define FUNCID_NOTIFY_READ_BE_RAW UL(30)
-+#define FUNCID_NOTIFY_READ_BE_OEN (FUNCID_NOTIFY_READ_BE_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_NOTIFY_READ_BE (FUNCID_NOTIFY_READ_BE_OEN | FUNCID_TYPE)
++#define OPTEE_SMC_FUNCID_CAN_READ_BE    OPTEE_FUNCID_CAN_READ_BE
++#define OPTEE_SMC_CALL_CAN_READ_BE  \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_READ_BE)
 +
++#define OPTEE_SMC_FUNCID_CAN_WRITE_BE   OPTEE_FUNCID_CAN_WRITE_BE
++#define OPTEE_SMC_CALL_CAN_WRITE_BE \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_WRITE_BE)
 +
-+#define FUNCID_NOTIFY_READ_LE_RAW UL(21)
-+#define FUNCID_NOTIFY_READ_LE_OEN (FUNCID_NOTIFY_READ_LE_RAW << FUNCID_OEN_SHIFT)
-+#define FUNCID_NOTIFY_READ_LE (FUNCID_NOTIFY_READ_LE_OEN | FUNCID_TYPE)
++#define OPTEE_SMC_FUNCID_CAN_READ_LE    OPTEE_FUNCID_CAN_READ_LE
++#define OPTEE_SMC_CALL_CAN_READ_LE  \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_READ_LE)
 +
-+#define OPTEE_FUNCID_CAN_NOTIFY 0xF1
-+#define OPTEE_FUNCID_READ_BE	0xF2
-+#define OPTEE_FUNCID_WRITE_BE	0xF3
-+#define OPTEE_FUNCID_READ_LE	0xF4
-+#define OPTEE_FUNCID_WRITE_LE	0xF5
++#define OPTEE_SMC_FUNCID_CAN_WRITE_LE    OPTEE_FUNCID_CAN_WRITE_LE
++#define OPTEE_SMC_CALL_CAN_WRITE_LE  \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_WRITE_LE)
 +
-+#define OPTEE_SMC_FUNCID_CAN_NOTIFY OPTEE_FUNCID_CAN_NOTIFY
-+#define OPTEE_SMC_CALL_CAN_NOTIFY \
-+	OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_NOTIFY)
-+
-+#define OPTEE_SMC_FUNCID_READ_BE OPTEE_FUNCID_READ_BE
-+#define OPTEE_SMC_CALL_READ_BE\
-+	OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_READ_BE)
-+
-+#define OPTEE_SMC_FUNCID_READ_LE OPTEE_FUNCID_READ_LE
-+#define OPTEE_SMC_CALL_READ_LE \
-+	OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_READ_LE)
-+
-+#define OPTEE_SMC_FUNCID_WRITE_LE OPTEE_FUNCID_WRITE_LE
-+#define OPTEE_SMC_CALL_WRITE_LE \
-+	OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_WRITE_LE)
-+
-+#define OPTEE_SMC_FUNCID_WRITE_BE OPTEE_FUNCID_WRITE_BE
-+#define OPTEE_SMC_CALL_WRITE_BE \
-+	OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_WRITE_BE)
-+
-+
-+__attribute__((always_inline)) static inline void prot_nic(void)
-+{
-+	struct arm_smccc_res res;
-+
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+
-+	arm_smccc_smc(FUNCID_PROT_NIC, // a0
-+		      0, // a1
-+		      0, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+}
-+
-+__attribute__((always_inline)) static inline void tx_tos(int queue,
-+							 unsigned int index)
-+{
-+	struct arm_smccc_res res;
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+	arm_smccc_smc(FUNCID_TX_TOS, // a0
-+		      (uint64_t)queue, // a1
-+		      (uint64_t)index, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+}
-+
-+__attribute__((always_inline)) static inline void tx_frs(int queue,
-+							 unsigned int pending)
-+{
-+	struct arm_smccc_res res;
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+	arm_smccc_smc(FUNCID_TX_FRS, // a0
-+		      (uint64_t)queue, // a1
-+		      (uint64_t)pending, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+}
-+
-+__attribute__((always_inline)) static inline void
-+rx_frs(int queue, unsigned int index, unsigned int budget)
-+{
-+	struct arm_smccc_res res;
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+	arm_smccc_smc(FUNCID_RX_FRS, // a0
-+		      (uint64_t)queue, // a1
-+		      (uint64_t)index, // a2
-+		      (uint64_t)budget, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+}
-+
-+__attribute__((always_inline)) static inline void
-+rx_tos(int queue, unsigned int index, unsigned int received)
-+{
-+	struct arm_smccc_res res;
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+	arm_smccc_smc(FUNCID_RX_TOS, // a0
-+		      (uint64_t)queue, // a1
-+		      (uint64_t)index, // a2
-+		      (uint64_t)received, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+}
-+
-+__attribute__((always_inline)) static inline void
-+my_writel(u32 value, volatile void __iomem *address)
-+{
-+	struct arm_smccc_res res;
-+	u64 val, adr;
-+
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+
-+	val = (u64)value;
-+	adr = translate_el1((u64)address);
-+
-+	arm_smccc_smc(FUNCID_WRITE_32, // a0
-+		      value, // a1
-+		      adr, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+}
-+
-+__attribute__((always_inline)) static inline u32
-+my_readl(volatile void __iomem *address)
-+{
-+	struct arm_smccc_res res;
-+	u64 adr;
-+
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+
-+	adr = translate_el1((u64)address);
-+
-+	arm_smccc_smc(FUNCID_READ_32, // a0
-+		      adr, // a1
-+		      0, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+
-+	// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-+
-+	return (u32)res.a1;
-+}
-+
-+__attribute__((always_inline)) static inline void 
-+teehsm_write_le(void* __iomem addr, uint32_t val)
-+{
-+	struct arm_smccc_res res;
-+	u64 address;
-+	address = translate_el1((u64)addr);
-+	arm_smccc_smc(FUNCID_NOTIFY_WRITE_LE, // a0
-+		address, // a1
-+		val, // a2
-+		0, // a3
-+		0, // a4
-+		0, // a5
-+		0, // a6
-+		0, // a7
-+		&res // res
-+	); 
-+	//printk(KERN_ALERT "DEBUG: WRITE_LE %px %d \n", (void*)address, (uint32_t)res.a0);
-+}
++#define OPTEE_SMC_FUNCID_CAN_TRIGGER_TX    OPTEE_FUNCID_CAN_TRIGGER_TX
++#define OPTEE_SMC_CALL_CAN_TRIGGER_TX  \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_TRIGGER_TX)
 +
 +__attribute__((always_inline)) static inline uint32_t 
-+teehsm_read_le(void* __iomem addr)
++secv_read_le(void* __iomem addr)
 +{
-+	//printk(KERN_ALERT "%s\n", __FUNCTION__);
++    struct arm_smccc_res res;
++    u64 address;
++    address = translate_el1((u64)addr);
++
++    arm_smccc_smc(OPTEE_SMC_CALL_CAN_READ_LE, // a0
++        address, // a1
++        0,  // a2
++        0,  // a3
++        0,  // a4
++        0,  // a5
++        0,  // a6
++        0,  // a7
++        &res
++    );
++    return (uint32_t)res.a1;
++}
++
++
++__attribute__((always_inline)) static inline void 
++secv_write_le(uint32_t val, void* __iomem addr)
++{
++    struct arm_smccc_res res;
++    u64 address;
++    address = translate_el1((u64)addr);
++
++    arm_smccc_smc(OPTEE_SMC_CALL_CAN_WRITE_LE, // a0
++        address, // a1
++        val,  // a2
++        0,  // a3
++        0,  // a4
++        0,  // a5
++        0,  // a6
++        0,  // a7
++        &res
++    );
++}
++
++__attribute__((always_inline)) static inline void
++secv_flexcan_trigger_tx(uint32_t interface_index)
++{
++    struct arm_smccc_res res;
++
++    arm_smccc_smc(OPTEE_SMC_CALL_CAN_TRIGGER_TX, // a0
++        interface_index, // a1
++        0,  // a2
++        0,  // a3
++        0,  // a4
++        0,  // a5
++        0,  // a6
++        0,  // a7
++        &res
++    );
++}
++
++__attribute__((always_inline)) static inline void
++secv_flexcan_init_notify(uint32_t interface_index)
++{
++    struct arm_smccc_res res;
++
++    arm_smccc_smc(OPTEE_SMC_CALL_CAN_INIT_NOTIFY, // a0
++        interface_index, // a1
++        0,  // a2
++        0,  // a3
++        0,  // a4
++        0,  // a5
++        0,  // a6
++        0,  // a7
++        &res
++    );
++}
++
++#endif
+\ No newline at end of file
+diff --git a/include/linux/can/rx-offload.h b/include/linux/can/rx-offload.h
+index d29bb4521947..f1ffbd92d7e5 100644
+--- a/include/linux/can/rx-offload.h
++++ b/include/linux/can/rx-offload.h
+@@ -18,6 +18,9 @@ struct can_rx_offload {
+ 	struct sk_buff *(*mailbox_read)(struct can_rx_offload *offload,
+ 					unsigned int mb, u32 *timestamp,
+ 					bool drop);
++	
++	/** SECV: read from SSMe rx_mb instead of the peripheral memory */
++	struct sk_buff *(*secv_mailbox_read)(struct can_rx_offload *offload, void* mb, u32* timestamp, bool drop);
+ 
+ 	struct sk_buff_head skb_queue;
+ 	struct sk_buff_head skb_irq_queue;
+@@ -41,6 +44,9 @@ int can_rx_offload_add_manual(struct net_device *dev,
+ 			      unsigned int weight);
+ int can_rx_offload_irq_offload_timestamp(struct can_rx_offload *offload,
+ 					 u64 reg);
++// SECV
++int secv_can_rx_offload_irq_offload_timestamp(struct can_rx_offload *offload, void* rx_mb);
++
+ int can_rx_offload_irq_offload_fifo(struct can_rx_offload *offload);
+ int can_rx_offload_queue_timestamp(struct can_rx_offload *offload,
+ 				   struct sk_buff *skb, u32 timestamp);
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index c02fd12b49dc..919358b33d3c 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -1554,6 +1554,10 @@ struct task_struct {
+ 	 *
+ 	 * Do not put anything below here!
+ 	 */
++	/**
++	 * SECV: can_buffer_rec, TODO: move this to some special page in the inner kernel
++	 */
++	void *can_buffer_rec;
+ };
+ 
+ static inline struct pid *task_pid(struct task_struct *task)
+diff --git a/net/can/af_can.c b/net/can/af_can.c
+index 7343fd487dbe..9e5ca91d4050 100644
+--- a/net/can/af_can.c
++++ b/net/can/af_can.c
+@@ -64,6 +64,7 @@
+ #include <net/sock.h>
+ 
+ #include "af_can.h"
++#include <linux/vmalloc.h>
+ 
+ MODULE_DESCRIPTION("Controller Area Network PF_CAN core");
+ MODULE_LICENSE("Dual BSD/GPL");
+@@ -211,6 +212,7 @@ int can_send(struct sk_buff *skb, int loop)
+ 
+ 		skb->protocol = htons(ETH_P_CANFD);
+ 
++		/* SECV: this breaks write permissions, can we avoid this by setting the bit earlier on? */
+ 		/* set CAN FD flag for CAN FD frames by default */
+ 		cfd->flags |= CANFD_FDF;
+ 	} else {
+@@ -781,6 +783,231 @@ void can_proto_unregister(const struct can_proto *cp)
+ }
+ EXPORT_SYMBOL(can_proto_unregister);
+ 
++/**
++ * SECV: custom sk_buff free function, this will free our CAN sk_buff, and return the secure buffer.
++ */
++void secv_can_skb_destructor(struct sk_buff *skb) {
++	secv_task_free_frame_buffer(skb->data);
++	sock_wfree(skb);
++}
++
++static int secv_current_has_frame_buffer(void)
++{
++	struct task_struct *task = current;
++	return task->can_buffer_rec != NULL;
++}
++
++/**
++ * SECV: helper function to return the unset bits in value
++ */
++static inline void get_unset_bits(u_int64_t value, u_int8_t bits[64], size_t *count) {
++    *count = 0;
++    u_int64_t inverted = ~value;  // flip all bits
++    
++    while (inverted != 0) {
++        bits[*count] = __builtin_ctzll(inverted);
++        (*count)++;
++        inverted &= inverted - 1;
++    }
++}
++
++/**
++ * SECV: allocate a buffer record for the current task
++ */
++int secv_alloc_can_buffer_rec(struct task_struct *task)
++{
++	unsigned long phys_addr;
++	unsigned long user_virt_addr;
++	void *kernel_virt_addr;
++	struct vm_area_struct *vma;
++	struct mm_struct *mm = task->mm;
++	unsigned long pfn;
++	struct page *page;
++	int ret;
++	struct secv_can_buffer_rec rec;
++
++	if (!mm || task->can_buffer_rec)
++		return -EBUSY;
++	
++	// rec = kzalloc(sizeof(struct secv_can_buffer_rec), GFP_KERNEL);
++	// if (!rec)
++	// 	return -ENOMEM;
++
++	rec.available = 0;
++	rec.buffer = NULL;
++
++	// Request physical memory from SSMe
++	phys_addr = (unsigned long)secv_tee_allocate_can_buffer(task->pid);
++	if (!phys_addr) {
++		ret = -ENOMEM;
++		//printk(KERN_ALERT "SECV: Failed to allocate secure buffer\n");
++		goto free_rec;
++	}
++
++	//printk(KERN_ALERT "Allocated phys_addr: %lx\n", (unsigned long)phys_addr);
++
++	// Convert physical address to page
++	pfn = phys_addr >> PAGE_SHIFT;
++	
++	// Validate PFN before using
++	if (!pfn_valid(pfn)) {
++		ret = -EINVAL;
++		//printk(KERN_ALERT "SECV: Failed to get pfn for physical page: %lx\n", (unsigned long)phys_addr);
++		goto free_rec_buffer;
++	}
++	
++	page = pfn_to_page(pfn);
++	
++	// Increment page reference count
++	get_page(page);
++
++	// Create kernel mapping (read-only)
++	// SECV: TODO, move this to the inner kernel.
++	kernel_virt_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
++	if (!kernel_virt_addr) {
++		ret = -ENOMEM;
++		//printk(KERN_ALERT "SECV: Mapping secure buffer to kernel failed\n");
++		goto put_page;
++	}
++
++	rec.kernel_addr = kernel_virt_addr;  // Store kernel mapping
++	rec.phys_addr = phys_addr;
++	rec.next_bit = 0;
++	spin_lock_init(&rec.lock);
++
++	// Find available virtual address in process's address space
++	down_write(&mm->mmap_lock);
++	user_virt_addr = get_unmapped_area(NULL, 0, SECV_CAN_BUFFER_SIZE, 0, 0);
++	if (IS_ERR_VALUE(user_virt_addr)) {
++		ret = user_virt_addr;
++		//printk(KERN_ALERT "SECV: No umapped area for process\n");
++		goto unmap_kernel;
++	}
++
++	rec.buffer = (void *)user_virt_addr;
++
++	// Create VMA for this buffer
++	vma = vm_area_alloc(mm);
++	if (!vma) {
++		ret = -ENOMEM;
++		//printk(KERN_ALERT "SECV: Failed to allocated vmarea\n");
++		goto unmap_kernel;
++	}
++
++	vma->vm_start = user_virt_addr;
++	vma->vm_end = user_virt_addr + SECV_CAN_BUFFER_SIZE;
++	// Use vm_flags_init() instead of direct assignment
++	vm_flags_init(vma, VM_READ | VM_WRITE | VM_SHARED | VM_DONTEXPAND | VM_DONTDUMP);
++	
++	vma->vm_page_prot = pgprot_writecombine(vm_get_page_prot(vma->vm_flags));
++	vma->vm_pgoff = pfn;
++
++	// Map physical pages into user space with RW permissions
++	ret = remap_pfn_range(vma, user_virt_addr, pfn, SECV_CAN_BUFFER_SIZE, vma->vm_page_prot);
++	if (ret) {
++		//printk(KERN_ALERT "SECV: remapping pfn range failed\n");
++		goto free_vma;
++	}
++
++	// Insert VMA into process's address space
++	ret = insert_vm_struct(mm, vma);
++	if (ret) {
++		//printk(KERN_ALERT "SECV: inserting vm struct failed\n");
++		goto free_vma;
++	}
++	
++	up_write(&mm->mmap_lock);
++	// SECV TODO: use RW in inner kernel & RO in outer kernel.
++	task->can_buffer_rec = (void *)kernel_virt_addr;
++	memcpy((void*)kernel_virt_addr, (void*)&rec, sizeof(struct secv_can_buffer_rec));
++	// copy_to_user((void*)user_virt_addr, (void*)&rec, sizeof(struct secv_can_buffer_rec));
++	// secv_wmb();
++	// flush_dcache_page(page);
++	return 0;
++
++free_vma:
++	vm_area_free(vma);
++unmap_kernel:
++	up_write(&mm->mmap_lock);
++	vunmap(kernel_virt_addr);  // Use vunmap, not iounmap
++put_page:
++	put_page(page);  // Decrement page refcount
++free_rec_buffer:
++	secv_tee_free_can_buffer(task->pid);
++free_rec:
++	return ret;  // Return proper error code
++}
++
++
++/**
++ * SECV: free a secure can frame
++ */
++void secv_task_free_frame_buffer(void* frame)
++{
++	struct task_struct *task;
++	struct secv_can_buffer_rec* rec;
++	u32 bit_index;
++	size_t diff;
++
++	task = current;
++	rec = (struct secv_can_buffer_rec*)task->can_buffer_rec;
++	diff = (char*)frame - (char*)rec->buffer;
++	diff /= sizeof(struct canfd_frame);
++	rec->available &= ~(0x1 << diff);
++}
++
++/**
++ * SECV: allocate a secure frame buffer for the current struct
++ */
++struct canfd_frame* secv_task_alloc_frame_buffer(u_int64_t *secure_phys_addr) 
++{
++	struct task_struct *task;
++	size_t bit_count;
++	struct secv_can_buffer_rec* rec;
++	struct canfd_frame* frame;
++	u_int8_t bits[64] = {0};
++	u_int64_t available;
++	long flags;
++
++	task = current;
++	frame = NULL;
++	if(!secv_current_has_frame_buffer() && secv_alloc_can_buffer_rec(task))
++	{
++		return NULL;
++	}
++
++	rec = (struct secv_can_buffer_rec*)task->can_buffer_rec;
++	spin_lock_irqsave(&rec->lock, flags);
++	get_unset_bits(rec->available, bits, &bit_count);
++	if(rec->next_bit >= SECV_MAX_SHADOW_FRAMES || rec->available & (1 << rec->next_bit)) {
++		//printk(KERN_ALERT "Set bits: %d, Available: %x\n", bit_count, rec->available);
++		spin_unlock_irqrestore(&rec->lock, flags);
++		return NULL;
++	}
++	// get_unset_bits(rec->available, bits, &bit_count);
++	// if(bit_count <= (sizeof(rec->available)*8 - SECV_MAX_SHADOW_FRAMES))
++	// {
++	// 	printk(KERN_ALERT "Set bits: %d, Available: %x\n", bit_count, rec->available);
++	// 	return NULL;
++	// }
++	bits[0] = rec->next_bit;
++	rec->next_bit = (rec->next_bit + 1) % SECV_MAX_SHADOW_FRAMES;
++	//available = rec->available;
++	available |= (1 << bits[0]);
++	
++	//copy_to_user((void*)&rec->available, (void*)&available, sizeof(u_int64_t));
++	// SECV TODO use user address or do this inner kernel.
++	frame = (struct canfd_frame*)((char*)rec->kernel_addr + sizeof(struct canfd_frame)*bits[0] + ((sizeof(struct secv_can_buffer_rec)+0x7) & ~((size_t)0x7)));
++	rec->available = available;
++	//copy_to_user((void*)frame, (void*)&secv_empty_frame, sizeof(struct canfd_frame));
++	//printk(KERN_ALERT "Allocated frame: %lx %lx %lx\n", (unsigned long)rec, (unsigned long)frame, (unsigned long)rec->phys_addr);
++	*secure_phys_addr = rec->phys_addr + sizeof(struct canfd_frame)*bits[0] +  ((sizeof(struct secv_can_buffer_rec)+0x7) & ~((size_t)0x7));
++	// secv_wmb();
++	// flush_dcache_page((struct page*)rec->page);
++	spin_unlock_irqrestore(&rec->lock, flags);
++	return frame;
++}
++
+ static int can_pernet_init(struct net *net)
+ {
+ 	spin_lock_init(&net->can.rcvlists_lock);
+diff --git a/net/can/af_can.h b/net/can/af_can.h
+index 7c2d9161e224..3f8eeb9214b8 100644
+--- a/net/can/af_can.h
++++ b/net/can/af_can.h
+@@ -45,6 +45,85 @@
+ #include <linux/list.h>
+ #include <linux/rcupdate.h>
+ #include <linux/can.h>
++#include <linux/spinlock_types.h>
++
++// SECV: related to secure frames
++#include <linux/sched.h>
++#include <linux/arm-smccc.h>
++
++#define SECV_MAX_SHADOW_FRAMES	32
++#define SECV_CAN_BUFFER_SIZE	PAGE_SIZE
++struct secv_can_buffer_rec {
++	void* buffer; // the pointer to the buffer base.
++	void* kernel_addr; // the kernel address base of this page.
++	u_int64_t phys_addr;
++	u_int64_t next_bit;
++	u_int64_t available; // tacks used frames
++	spinlock_t lock;
++};
++
++static struct canfd_frame secv_empty_frame = {.can_id = 0, .data = {0}, .flags = 0, .len = 0, .__res0 = 0, .__res1=0};
++
++#define OPTEE_FUNCID_CAN_ALLOCATE_BUFFER	0xFC
++#define OPTEE_FUNCID_CAN_FREE_BUFFER		0xFD
++
++#define OPTEE_SMC_FAST_CALL_VAL(func_num) \
++            ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_32, \
++                ARM_SMCCC_OWNER_TRUSTED_OS, (func_num))
++
++#define OPTEE_SMC_FUNCID_CAN_ALLOCATE_BUFFER    OPTEE_FUNCID_CAN_ALLOCATE_BUFFER
++#define OPTEE_SMC_CALL_CAN_ALLOCATE_BUFFER  \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_ALLOCATE_BUFFER)
++
++#define OPTEE_SMC_FUNCID_CAN_FREE_BUFFER    OPTEE_FUNCID_CAN_FREE_BUFFER
++#define OPTEE_SMC_CALL_CAN_FREE_BUFFER  \
++                OPTEE_SMC_FAST_CALL_VAL(OPTEE_SMC_FUNCID_CAN_FREE_BUFFER)
++
++__attribute__((always_inline)) static inline void __iomem*
++secv_tee_allocate_can_buffer(pid_t pid)
++{
 +	struct arm_smccc_res res;
-+	u64 address;
-+	address = translate_el1((u64)addr);
-+	//printk(KERN_ALERT "%s %px\n", __FUNCTION__, (void*)address);
-+	arm_smccc_smc(FUNCID_NOTIFY_READ_LE, // a0
-+		address, // a1
++	u64 pidu64 = (u64)pid;
++	arm_smccc_smc(OPTEE_SMC_CALL_CAN_ALLOCATE_BUFFER, // a0
++		pidu64, // a1
 +		0, // a2
 +		0, // a3
 +		0, // a4
@@ -1473,20 +1414,17 @@ index 000000000000..123c6cab52ee
 +		0, // a6
 +		0, // a7
 +		&res // res
-+	); // printk(KERN_ALERT "DEBUG: WRITE_LE %px %d \n", (void*)address, val);
-+	return (uint32_t)res.a0;
++	);
++	return (void __iomem*)res.a1;
 +}
 +
-+__attribute__((always_inline)) static inline uint32_t 
-+teehsm_read_be(void* __iomem addr)
++__attribute__((always_inline)) static inline void 
++secv_tee_free_can_buffer(pid_t pid)
 +{
-+	//printk(KERN_ALERT "%s\n", __FUNCTION__);
 +	struct arm_smccc_res res;
-+	u64 address;
-+	address = translate_el1((u64)addr);
-+	//printk(KERN_ALERT "%s %px\n", __FUNCTION__, (void*)address);
-+	arm_smccc_smc(OPTEE_SMC_CALL_READ_BE, // a0
-+		address, // a1
++	u64 pidu64 = (u64)pid;
++	arm_smccc_smc(OPTEE_SMC_CALL_CAN_FREE_BUFFER, // a0
++		pidu64, // a1
 +		0, // a2
 +		0, // a3
 +		0, // a4
@@ -1494,1680 +1432,174 @@ index 000000000000..123c6cab52ee
 +		0, // a6
 +		0, // a7
 +		&res // res
-+	); // printk(KERN_ALERT "DEBUG: WRITE_LE %px %d \n", (void*)address, val);
-+	return res.a1;
-+}
-+
-+__attribute__((always_inline)) static inline void 
-+teehsm_write_be(void* __iomem addr, uint32_t val)
-+{
-+	struct arm_smccc_res res;
-+	u64 address, value;
-+	address = translate_el1((u64)addr);
-+	value = (u64)val;
-+	arm_smccc_smc(OPTEE_SMC_CALL_WRITE_BE, // a0
-+		address, // a1
-+		value, // a2
-+		0, // a3
-+		0, // a4
-+		0, // a5
-+		0, // a6
-+		0, // a7
-+		&res // res
 +	);
 +}
 +
-+__attribute__((always_inline)) static inline void
-+teehsm_notify_write_be(void)
++/** SEV: memory ordering functions */
++static inline void secv_wmb(void)
 +{
-+	struct arm_smccc_res res;
-+
-+	//printk(KERN_ALERT "DEBUG: TEEHSM %s %d \n",__FUNCTION__,__LINE__);
-+
-+	arm_smccc_smc(OPTEE_SMC_CALL_CAN_NOTIFY, // a0
-+		      0, // a1
-+		      0, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+
-+	//printk(KERN_ALERT "DEBUG: TEEHSM %d \n", (int)res.a0);
-+
++    asm volatile ("dmb st" : : : "memory");
 +}
 +
-+__attribute__((always_inline)) static inline void 
-+teehsm_notify_write_le(void)
++static inline void secv_rmb(void)
 +{
-+	struct arm_smccc_res res;
-+
-+	//printk(KERN_ALERT "DEBUG: TEEHSM %s %d \n",__FUNCTION__,__LINE__);
-+
-+	arm_smccc_smc(OPTEE_SMC_CALL_CAN_NOTIFY, // a0
-+		      0, // a1
-+		      0, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+	printk(KERN_ALERT "DEBUG: TEEHSM %d \n", (int)res.a0);
++    asm volatile ("dmb ld" : : : "memory");
 +}
+ 
+ /* af_can rx dispatcher structures */
+ 
+@@ -100,4 +179,11 @@ void can_init_proc(struct net *net);
+ void can_remove_proc(struct net *net);
+ void can_stat_update(struct timer_list *t);
+ 
 +
-+__attribute__((always_inline)) static inline void 
-+teehsm_notify_read_be(void)
-+{
-+	struct arm_smccc_res res;
-+
-+	//printk(KERN_ALERT "DEBUG: TEEHSM %s %d \n",__FUNCTION__,__LINE__);
-+
-+	arm_smccc_smc(OPTEE_SMC_CALL_CAN_NOTIFY, // a0
-+		      0, // a1
-+		      0, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+	printk(KERN_ALERT "DEBUG: TEEHSM %d \n", (int)res.a0);
-+}
-+
-+__attribute__((always_inline)) static inline void 
-+teehsm_notify_read_le(void)
-+{
-+	struct arm_smccc_res res;
-+
-+	//printk(KERN_ALERT "DEBUG: TEEHSM %s %d \n",__FUNCTION__,__LINE__);
-+
-+	arm_smccc_smc(FUNCID_NOTIFY_READ_LE, // a0
-+		      0, // a1
-+		      0, // a2
-+		      0, // a3
-+		      0, // a4
-+		      0, // a5
-+		      0, // a6
-+		      0, // a7
-+		      &res // res
-+	);
-+	//printk(KERN_ALERT "DEBUG: TEEHSM %d \n", (int)res.a0);
-+}
-+#endif
-+
-+// ----------------------------------------------------------------------------
-+// For reasons of debugging
-+// ----------------------------------------------------------------------------
-+
-+#ifndef TRAP_TO_EL3
-+
-+__attribute__((always_inline)) static inline void
-+my_writel(u32 value, volatile void __iomem *address)
-+{
-+	writel(value, address);
-+}
-+
-+__attribute__((always_inline)) static inline u32
-+my_readl(volatile void __iomem *address)
-+{
-+	return readl(address);
-+}
-+#endif
-+
-+#endif /* FEC_HELPERS_H */
-diff --git a/drivers/net/can/sorhta/Makefile b/drivers/net/can/sorhta/Makefile
-new file mode 100644
-index 000000000000..26dc30cfd01a
---- /dev/null
-+++ b/drivers/net/can/sorhta/Makefile
-@@ -0,0 +1,7 @@
-+# Makefile for SORHTA CAN security layer
-+
-+obj-$(CONFIG_CAN_SORHTA_SECURITY) += sorhta_can_security.o
-+
-+sorhta_can_security-y := sorhta_can_security_core.o sorhta_can_security_socket.o sorhta_can_security_buffer.o sorhta_can_security_policy.o
-+
-+ccflags-$(CONFIG_CAN_SORHTA_SECURITY) += -Wall
-\ No newline at end of file
-diff --git a/drivers/net/can/sorhta/sorhta_can_security_buffer.c b/drivers/net/can/sorhta/sorhta_can_security_buffer.c
-new file mode 100644
-index 000000000000..1cd5036d7dae
---- /dev/null
-+++ b/drivers/net/can/sorhta/sorhta_can_security_buffer.c
-@@ -0,0 +1,551 @@
-+/*
-+ * Redesigned Shadow Buffer Management
-+ * 
-+ * This file implements the shadow buffer management system with
-+ * process-owned buffers and read-only kernel access.
-+ */
-+
-+ #include <linux/module.h>
-+ #include <linux/kernel.h>
-+ #include <linux/init.h>
-+ #include <linux/fs.h>
-+ #include <linux/mm.h>
-+ #include <linux/slab.h>
-+ #include <linux/spinlock.h>
-+ #include <linux/list.h>
-+ #include <linux/wait.h>
-+ #include <linux/sched.h>
-+ #include <linux/pid.h>
-+ #include <linux/kthread.h>
-+ #include <linux/delay.h>
-+ #include <linux/can.h>
-+ #include <linux/can/dev.h>
-+ #include <linux/can/core.h>
-+ #include <linux/uaccess.h>
-+ #include <linux/proc_fs.h>
-+ #include <linux/seq_file.h>
-+ #include <linux/mman.h>
-+ #include <asm/io.h>
-+ #include <linux/vmalloc.h>
-+ #include <linux/highmem.h>
-+ 
-+ #include "sorhta_can_security.h"
-+ 
-+ /* Constants */
-+ #define MAX_SHADOW_BUFFERS 64
-+ #define MAX_SHADOW_FRAMES 64
-+ #define BUFFER_SIZE PAGE_ALIGN(sizeof(struct shadow_buffer_header) + \
-+                              (MAX_SHADOW_FRAMES * sizeof(struct can_frame)))
-+ 
-+ /* Structure for shadow buffer control */
-+ struct shadow_buffer_header {
-+     volatile unsigned int write_idx;    /* Process writes here */
-+     volatile unsigned int read_idx;     /* Kernel reads here */
-+     volatile unsigned int flags;        /* Control flags */
-+     volatile unsigned int status;       /* Status information */
-+     volatile unsigned int frame_count;  /* Number of frames processed */
-+     volatile unsigned int error_count;  /* Error counter */
-+     volatile unsigned int pad[2];       /* Padding for 32-byte alignment */
-+ };
-+ 
-+ /* Complete shadow buffer */
-+ struct shadow_buffer {
-+     struct shadow_buffer_header header;
-+     struct can_frame frames[MAX_SHADOW_FRAMES];
-+ };
-+ 
-+ /* Management structure for a shadow buffer */
-+ struct shadow_buffer_entry {
-+     struct list_head list;
-+     pid_t pid;                          /* Process ID */
-+     struct task_struct *task;           /* Task struct pointer */
-+     struct mm_struct *mm;               /* Memory manager */
-+     void __user *user_buffer;           /* User-space buffer address */
-+     struct shadow_buffer *kernel_view;  /* Kernel read-only view */
-+     unsigned long user_addr;            /* User-space address */
-+     struct page *pages;                 /* Pages backing the buffer */
-+     int num_pages;                      /* Number of pages */
-+     struct net_device *dev;             /* Associated CAN device */
-+     atomic_t active;                    /* Buffer active flag */
-+     ktime_t last_activity;              /* Time of last activity */
-+     spinlock_t lock;                    /* Lock for buffer access */
-+ };
-+ 
-+ /* Global state */
-+ static LIST_HEAD(shadow_buffer_list);
-+ static DEFINE_SPINLOCK(sb_list_lock);
-+ static atomic_t buffer_count = ATOMIC_INIT(0);
-+ static struct task_struct *processing_thread = NULL;
-+ DECLARE_WAIT_QUEUE_HEAD(sb_processing_wait);
-+ static atomic_t processing_active = ATOMIC_INIT(1);
-+ static struct proc_dir_entry *proc_dir = NULL;
-+ 
-+ /* Forward declarations */
-+ static int process_shadow_buffers(void *data);
-+ static void shadow_buffer_cleanup(struct shadow_buffer_entry *sb);
-+ static int shadow_buffer_proc_show(struct seq_file *m, void *v);
-+ static int shadow_buffer_proc_open(struct inode *inode, struct file *file);
-+ 
-+ /* Proc file operations */
-+ static const struct file_operations shadow_buffer_proc_fops = {
-+     .owner = THIS_MODULE,
-+     .open = shadow_buffer_proc_open,
-+     .read = seq_read,
-+     .llseek = seq_lseek,
-+     .release = single_release,
-+ };
-+ 
-+ /* 
-+  * Initialize shadow buffer subsystem 
-+  */
-+ int shadow_buffer_init(void)
-+ {
-+     printk(KERN_INFO "CAN Security: Initializing shadow buffer management\n");
-+     
-+     /* Create processing thread */
-+     processing_thread = kthread_run(process_shadow_buffers, NULL, "can_security");
-+     if (IS_ERR(processing_thread)) {
-+         printk(KERN_ERR "CAN Security: Failed to create processing thread\n");
-+         return PTR_ERR(processing_thread);
-+     }
-+     
-+     /* Create proc entries */
-+     proc_dir = proc_mkdir("can_security", NULL);
-+     if (proc_dir) {
-+         proc_create("buffers", 0444, proc_dir, &shadow_buffer_proc_fops);
-+     }
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * Clean up shadow buffer subsystem
-+  */
-+ void shadow_buffer_cleanup(void)
-+ {
-+     struct shadow_buffer_entry *sb, *tmp;
-+     
-+     printk(KERN_INFO "CAN Security: Cleaning up shadow buffer management\n");
-+     
-+     /* Stop processing thread */
-+     if (processing_thread && !IS_ERR(processing_thread)) {
-+         kthread_stop(processing_thread);
-+         processing_thread = NULL;
-+     }
-+     
-+     /* Clean up all shadow buffers */
-+     spin_lock(&sb_list_lock);
-+     list_for_each_entry_safe(sb, tmp, &shadow_buffer_list, list) {
-+         list_del(&sb->list);
-+         shadow_buffer_cleanup(sb);
-+     }
-+     spin_unlock(&sb_list_lock);
-+     
-+     /* Remove proc entries */
-+     if (proc_dir) {
-+         remove_proc_entry("buffers", proc_dir);
-+         remove_proc_entry("can_security", NULL);
-+     }
-+ }
-+ 
-+ /*
-+  * Open proc file
-+  */
-+ static int shadow_buffer_proc_open(struct inode *inode, struct file *file)
-+ {
-+     return single_open(file, shadow_buffer_proc_show, NULL);
-+ }
-+ 
-+ /*
-+  * Show shadow buffer status
-+  */
-+ static int shadow_buffer_proc_show(struct seq_file *m, void *v)
-+ {
-+     struct shadow_buffer_entry *sb;
-+     unsigned int read_idx, write_idx, count, errors;
-+     
-+     seq_printf(m, "CAN Security Shadow Buffer Status\n");
-+     seq_printf(m, "Total buffers: %d\n\n", atomic_read(&buffer_count));
-+     seq_printf(m, "PID\tDevice\tFrames\tErrors\tBuffered\tLast Activity\n");
-+     
-+     spin_lock(&sb_list_lock);
-+     list_for_each_entry(sb, &shadow_buffer_list, list) {
-+         if (sb->kernel_view) {
-+             read_idx = READ_ONCE(sb->kernel_view->header.read_idx);
-+             write_idx = READ_ONCE(sb->kernel_view->header.write_idx);
-+             count = READ_ONCE(sb->kernel_view->header.frame_count);
-+             errors = READ_ONCE(sb->kernel_view->header.error_count);
-+             
-+             /* Calculate buffered frames */
-+             int buffered = (write_idx >= read_idx) ? 
-+                           (write_idx - read_idx) : 
-+                           (MAX_SHADOW_FRAMES - read_idx + write_idx);
-+             
-+             seq_printf(m, "%d\t%s\t%u\t%u\t%d\t%lld ms\n",
-+                       sb->pid,
-+                       sb->dev->name,
-+                       count,
-+                       errors,
-+                       buffered,
-+                       ktime_to_ms(ktime_sub(ktime_get(), sb->last_activity)));
-+         }
-+     }
-+     spin_unlock(&sb_list_lock);
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * VM fault handler for shadow buffer mapping
-+  */
-+ static vm_fault_t shadow_buffer_vm_fault(struct vm_fault *vmf)
-+ {
-+     struct vm_area_struct *vma = vmf->vma;
-+     struct shadow_buffer_entry *sb = vma->vm_private_data;
-+     struct page *page;
-+     unsigned long offset;
-+     
-+     if (!sb || !sb->pages) {
-+         return VM_FAULT_SIGBUS;
-+     }
-+     
-+     offset = vmf->pgoff;
-+     if (offset >= sb->num_pages) {
-+         return VM_FAULT_SIGBUS;
-+     }
-+     
-+     page = sb->pages + offset;
-+     get_page(page);
-+     vmf->page = page;
-+     
-+     return 0;
-+ }
-+ 
-+ /* VM operations for shadow buffer mapping */
-+ static const struct vm_operations_struct shadow_buffer_vm_ops = {
-+     .fault = shadow_buffer_vm_fault,
-+ };
-+ 
-+ /*
-+  * Create a shadow buffer for a process
-+  */
-+ struct shadow_buffer_entry *shadow_buffer_create(struct task_struct *task, 
-+                                              struct net_device *dev)
-+ {
-+     struct shadow_buffer_entry *sb;
-+     struct page *pages;
-+     void *kernel_addr, *kernel_ro_addr;
-+     unsigned long user_addr;
-+     struct vm_area_struct *vma;
-+     int ret, num_pages, i;
-+     
-+     /* Calculate number of pages needed */
-+     num_pages = BUFFER_SIZE / PAGE_SIZE;
-+     if (BUFFER_SIZE % PAGE_SIZE) {
-+         num_pages++;
-+     }
-+     
-+     /* Check buffer count limit */
-+     if (atomic_read(&buffer_count) >= MAX_SHADOW_BUFFERS) {
-+         printk(KERN_ERR "CAN Security: Too many shadow buffers\n");
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     
-+     /* Allocate management structure */
-+     sb = kzalloc(sizeof(struct shadow_buffer_entry), GFP_KERNEL);
-+     if (!sb) {
-+         printk(KERN_ERR "CAN Security: Failed to allocate management structure\n");
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     
-+     /* Initialize structure */
-+     sb->pid = task_pid_nr(task);
-+     sb->task = task;
-+     sb->mm = task->mm;
-+     sb->num_pages = num_pages;
-+     sb->dev = dev;
-+     atomic_set(&sb->active, 1);
-+     sb->last_activity = ktime_get();
-+     spin_lock_init(&sb->lock);
-+     
-+     /* Allocate pages for the buffer */
-+     pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(BUFFER_SIZE));
-+     if (!pages) {
-+         printk(KERN_ERR "CAN Security: Failed to allocate pages\n");
-+         kfree(sb);
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     sb->pages = pages;
-+     
-+     /* Get normal kernel mapping */
-+     kernel_addr = page_address(pages);
-+     
-+     /* Initialize buffer */
-+     memset(kernel_addr, 0, BUFFER_SIZE);
-+     
-+     /* Create a read-only kernel mapping */
-+     kernel_ro_addr = vmap(&pages, 1, VM_MAP, PAGE_KERNEL_RO);
-+     if (!kernel_ro_addr) {
-+         printk(KERN_ERR "CAN Security: Failed to create read-only mapping\n");
-+         __free_pages(pages, get_order(BUFFER_SIZE));
-+         kfree(sb);
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     sb->kernel_view = (struct shadow_buffer *)kernel_ro_addr;
-+     
-+     /* Find unmapped area in process address space */
-+     down_write(&task->mm->mmap_sem);
-+     user_addr = do_mmap(NULL, 0, BUFFER_SIZE, 
-+                       PROT_READ | PROT_WRITE, 
-+                       MAP_SHARED | MAP_ANONYMOUS, 
-+                       0);
-+     if (IS_ERR_VALUE(user_addr)) {
-+         up_write(&task->mm->mmap_sem);
-+         vunmap(kernel_ro_addr);
-+         __free_pages(pages, get_order(BUFFER_SIZE));
-+         kfree(sb);
-+         return ERR_PTR((int)user_addr);
-+     }
-+     
-+     /* Get the VMA */
-+     vma = find_vma(task->mm, user_addr);
-+     if (!vma || vma->vm_start > user_addr) {
-+         up_write(&task->mm->mmap_sem);
-+         vunmap(kernel_ro_addr);
-+         __free_pages(pages, get_order(BUFFER_SIZE));
-+         kfree(sb);
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     
-+     /* Set up VMA for our custom fault handler */
-+     vma->vm_ops = &shadow_buffer_vm_ops;
-+     vma->vm_private_data = sb;
-+     vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
-+     
-+     /* Map the pages into the process's address space */
-+     for (i = 0; i < num_pages; i++) {
-+         ret = vm_insert_page(vma, user_addr + (i * PAGE_SIZE), pages + i);
-+         if (ret) {
-+             up_write(&task->mm->mmap_sem);
-+             vunmap(kernel_ro_addr);
-+             __free_pages(pages, get_order(BUFFER_SIZE));
-+             kfree(sb);
-+             return ERR_PTR(ret);
-+         }
-+     }
-+     up_write(&task->mm->mmap_sem);
-+     
-+     sb->user_addr = user_addr;
-+     sb->user_buffer = (void __user *)user_addr;
-+     
-+     /* Add to the global list */
-+     spin_lock(&sb_list_lock);
-+     list_add(&sb->list, &shadow_buffer_list);
-+     atomic_inc(&buffer_count);
-+     spin_unlock(&sb_list_lock);
-+     
-+     printk(KERN_INFO "CAN Security: Created shadow buffer for PID %d\n", sb->pid);
-+     
-+     return sb;
-+ }
-+ 
-+ /*
-+  * Find or create a shadow buffer for a process
-+  */
-+ struct shadow_buffer_entry *shadow_buffer_get(struct task_struct *task, 
-+                                          struct net_device *dev)
-+ {
-+     struct shadow_buffer_entry *sb = NULL;
-+     pid_t pid = task_pid_nr(task);
-+     int found = 0;
-+     
-+     /* Look for existing buffer */
-+     spin_lock(&sb_list_lock);
-+     list_for_each_entry(sb, &shadow_buffer_list, list) {
-+         if (sb->pid == pid && sb->dev == dev) {
-+             found = 1;
-+             sb->last_activity = ktime_get();
-+             break;
-+         }
-+     }
-+     spin_unlock(&sb_list_lock);
-+     
-+     if (found && atomic_read(&sb->active))
-+         return sb;
-+     
-+     /* Create new buffer */
-+     return shadow_buffer_create(task, dev);
-+ }
-+ 
-+ /*
-+  * Clean up a shadow buffer
-+  */
-+ static void shadow_buffer_cleanup(struct shadow_buffer_entry *sb)
-+ {
-+     if (!sb)
-+         return;
-+     
-+     /* Unmap kernel read-only view */
-+     if (sb->kernel_view)
-+         vunmap(sb->kernel_view);
-+     
-+     /* Free pages */
-+     if (sb->pages)
-+         __free_pages(sb->pages, get_order(BUFFER_SIZE));
-+     
-+     kfree(sb);
-+ }
-+ 
-+ /*
-+  * Release a shadow buffer
-+  */
-+ void shadow_buffer_release(struct shadow_buffer_entry *sb)
-+ {
-+     if (!sb)
-+         return;
-+     
-+     atomic_set(&sb->active, 0);
-+     
-+     spin_lock(&sb_list_lock);
-+     list_del(&sb->list);
-+     atomic_dec(&buffer_count);
-+     spin_unlock(&sb_list_lock);
-+     
-+     shadow_buffer_cleanup(sb);
-+ }
-+ 
-+ /*
-+  * Notify that a process has exited
-+  */
-+ void shadow_buffer_process_exit(struct task_struct *task)
-+ {
-+     struct shadow_buffer_entry *sb, *tmp;
-+     pid_t pid = task_pid_nr(task);
-+     
-+     spin_lock(&sb_list_lock);
-+     list_for_each_entry_safe(sb, tmp, &shadow_buffer_list, list) {
-+         if (sb->pid == pid) {
-+             list_del(&sb->list);
-+             atomic_dec(&buffer_count);
-+             shadow_buffer_cleanup(sb);
-+         }
-+     }
-+     spin_unlock(&sb_list_lock);
-+ }
-+ 
-+ /*
-+  * Process shadow buffers and send frames
-+  */
-+ static int process_shadow_buffers(void *data)
-+ {
-+     struct shadow_buffer_entry *sb, *tmp;
-+     struct can_frame frame;
-+     struct sk_buff *skb;
-+     unsigned int read_idx, write_idx;
-+     int processed, ret;
-+     
-+     while (!kthread_should_stop()) {
-+         processed = 0;
-+         
-+         /* Process all shadow buffers */
-+         spin_lock(&sb_list_lock);
-+         list_for_each_entry_safe(sb, tmp, &shadow_buffer_list, list) {
-+             /* Skip inactive buffers */
-+             if (!atomic_read(&sb->active)) {
-+                 continue;
-+             }
-+             
-+             /* Check if process still exists */
-+             if (!pid_task(find_vpid(sb->pid), PIDTYPE_PID)) {
-+                 list_del(&sb->list);
-+                 atomic_dec(&buffer_count);
-+                 shadow_buffer_cleanup(sb);
-+                 continue;
-+             }
-+             
-+             /* Get buffer indices */
-+             read_idx = READ_ONCE(sb->kernel_view->header.read_idx);
-+             write_idx = READ_ONCE(sb->kernel_view->header.write_idx);
-+             
-+             /* Skip if empty */
-+             if (read_idx == write_idx) {
-+                 continue;
-+             }
-+             
-+             /* Process up to 8 frames */
-+             spin_lock(&sb->lock);
-+             
-+             while (read_idx != write_idx && processed < 8) {
-+                 /* Copy frame from read-only buffer */
-+                 memcpy(&frame, &sb->kernel_view->frames[read_idx], sizeof(struct can_frame));
-+                 
-+                 /* Move read index */
-+                 read_idx = (read_idx + 1) % MAX_SHADOW_FRAMES;
-+                 
-+                 /* Update read index in the actual buffer */
-+                 WRITE_ONCE(((struct shadow_buffer *)page_address(sb->pages))->header.read_idx, read_idx);
-+                 
-+                 spin_unlock(&sb->lock);
-+                 
-+                 /* Apply security policies (if any) */
-+                 if (can_security_check_frame(sb->pid, &frame) != 0) {
-+                     /* Policy denied the frame */
-+                     WRITE_ONCE(((struct shadow_buffer *)page_address(sb->pages))->header.error_count,
-+                                READ_ONCE(sb->kernel_view->header.error_count) + 1);
-+                     spin_lock(&sb->lock);
-+                     continue;
-+                 }
-+                 
-+                 /* Create socket buffer */
-+                 skb = alloc_can_skb(sb->dev, &frame);
-+                 if (!skb) {
-+                     WRITE_ONCE(((struct shadow_buffer *)page_address(sb->pages))->header.error_count,
-+                                READ_ONCE(sb->kernel_view->header.error_count) + 1);
-+                     spin_lock(&sb->lock);
-+                     continue;
-+                 }
-+                 
-+                 /* Send the frame */
-+                 ret = sb->dev->netdev_ops->ndo_start_xmit(skb, sb->dev);
-+                 if (ret != NETDEV_TX_OK) {
-+                     WRITE_ONCE(((struct shadow_buffer *)page_address(sb->pages))->header.error_count,
-+                                READ_ONCE(sb->kernel_view->header.error_count) + 1);
-+                 }
-+                 
-+                 /* Update statistics */
-+                 processed++;
-+                 WRITE_ONCE(((struct shadow_buffer *)page_address(sb->pages))->header.frame_count,
-+                            READ_ONCE(sb->kernel_view->header.frame_count) + 1);
-+                 
-+                 /* Re-acquire lock and re-read indices */
-+                 spin_lock(&sb->lock);
-+                 write_idx = READ_ONCE(sb->kernel_view->header.write_idx);
-+             }
-+             
-+             /* Check for inactivity */
-+             if (ktime_after(ktime_get(), ktime_add_ms(sb->last_activity, 60000))) {
-+                 list_del(&sb->list);
-+                 atomic_dec(&buffer_count);
-+                 spin_unlock(&sb->lock);
-+                 shadow_buffer_cleanup(sb);
-+             } else {
-+                 spin_unlock(&sb->lock);
-+             }
-+         }
-+         spin_unlock(&sb_list_lock);
-+         
-+         /* Sleep if no frames processed */
-+         if (processed == 0) {
-+             ret = wait_event_interruptible_timeout(
-+                 sb_processing_wait,
-+                 kthread_should_stop(),
-+                 msecs_to_jiffies(10)
-+             );
-+         } else {
-+             /* Small delay to prevent CPU hogging */
-+             usleep_range(100, 200);
-+         }
-+     }
-+     
-+     return 0;
-+}
-\ No newline at end of file
-diff --git a/drivers/net/can/sorhta/sorhta_can_security_core.c b/drivers/net/can/sorhta/sorhta_can_security_core.c
-new file mode 100644
-index 000000000000..ed5f62fe6d61
---- /dev/null
-+++ b/drivers/net/can/sorhta/sorhta_can_security_core.c
-@@ -0,0 +1,558 @@
-+/*
-+ * Correctly Designed CAN Security Layer for S32G3
-+ * 
-+ * This implementation ensures that processes write directly to their shadow
-+ * buffers and the kernel only has read-only access.
-+ */
-+
-+ #include <linux/module.h>
-+ #include <linux/kernel.h>
-+ #include <linux/init.h>
-+ #include <linux/fs.h>
-+ #include <linux/slab.h>
-+ #include <linux/mm.h>
-+ #include <linux/can.h>
-+ #include <linux/can/dev.h>
-+ #include <linux/can/core.h>
-+ #include <linux/can/raw.h>
-+ #include <linux/list.h>
-+ #include <linux/spinlock.h>
-+ #include <linux/pid.h>
-+ #include <linux/sched.h>
-+ #include <linux/uaccess.h>
-+ #include <linux/netdevice.h>
-+ #include <linux/if_arp.h>
-+ #include <linux/net.h>
-+ #include <linux/mutex.h>
-+ #include <linux/socket.h>
-+ #include <linux/mman.h>
-+ #include <linux/wait.h>
-+ #include <linux/sysfs.h>
-+ #include <linux/kthread.h>
-+ #include <linux/delay.h>
-+ #include <linux/proc_fs.h>
-+ #include <linux/seq_file.h>
-+ #include <asm/atomic.h>
-+ 
-+ /* Structure definitions */
-+ #define MAX_SHADOW_FRAMES 64
-+ #define SHADOW_BUFFER_SIZE PAGE_ALIGN(sizeof(struct shadow_buffer_header) + \
-+                                      (MAX_SHADOW_FRAMES * sizeof(struct can_frame)))
-+ 
-+ /* Shadow buffer control structure at the beginning of the buffer */
-+ struct shadow_buffer_header {
-+     volatile unsigned int write_idx;    /* Process writes here */
-+     volatile unsigned int read_idx;     /* Kernel reads here */
-+     volatile unsigned int flags;        /* Control flags */
-+     volatile unsigned int status;       /* Status information */
-+     volatile unsigned int frame_count;  /* Number of frames processed */
-+     volatile unsigned int pad[3];       /* Padding for cache line alignment */
-+ };
-+ 
-+ /* Complete shadow buffer (user space view) */
-+ struct shadow_buffer {
-+     struct shadow_buffer_header header;
-+     struct can_frame frames[MAX_SHADOW_FRAMES];
-+ };
-+ 
-+ /* Management structure for a shadow buffer */
-+ struct shadow_buffer_entry {
-+     struct list_head list;
-+     pid_t pid;                          /* Process ID */
-+     struct task_struct *task;           /* Task struct pointer */
-+     struct mm_struct *mm;               /* Memory manager */
-+     struct shadow_buffer *user_buffer;  /* User space buffer (read-write) */
-+     struct shadow_buffer *kernel_view;  /* Kernel space buffer (read-only) */
-+     unsigned long user_addr;            /* User space address */
-+     struct page *pages;                 /* Pages backing the buffer */
-+     int num_pages;                      /* Number of pages */
-+     struct net_device *dev;             /* Associated CAN device */
-+     atomic_t active;                    /* Buffer active flag */
-+     ktime_t last_activity;              /* Time of last activity */
-+     spinlock_t lock;                    /* Lock for buffer access */
-+ };
-+ 
-+ /* Socket extension for shadow buffer */
-+ struct can_sock_shadow {
-+     struct can_sock cs;                 /* Base CAN socket */
-+     struct shadow_buffer_entry *sb;     /* Shadow buffer */
-+     atomic_t initialized;               /* Initialization flag */
-+ };
-+ 
-+ /* Global state */
-+ static LIST_HEAD(shadow_buffer_list);
-+ static DEFINE_SPINLOCK(sb_list_lock);
-+ static struct task_struct *processing_thread = NULL;
-+ static DECLARE_WAIT_QUEUE_HEAD(processing_wait);
-+ 
-+ /* Forward declarations */
-+ static int can_raw_sendmsg_shadow(struct socket *sock, struct msghdr *msg, size_t size);
-+ static int process_shadow_buffers(void *data);
-+ static int shadow_buffer_proc_show(struct seq_file *m, void *v);
-+ static struct shadow_buffer_entry *create_shadow_buffer(struct task_struct *task, 
-+                                                      struct net_device *dev);
-+ 
-+ /* Original CAN raw socket sendmsg function */
-+ static int (*original_can_raw_sendmsg)(struct socket *sock, struct msghdr *msg, size_t size);
-+ 
-+ /* Proc file operations */
-+ static int shadow_buffer_proc_open(struct inode *inode, struct file *file)
-+ {
-+     return single_open(file, shadow_buffer_proc_show, NULL);
-+ }
-+ 
-+ static const struct file_operations shadow_buffer_proc_fops = {
-+     .owner = THIS_MODULE,
-+     .open = shadow_buffer_proc_open,
-+     .read = seq_read,
-+     .llseek = seq_lseek,
-+     .release = single_release,
-+ };
-+ 
-+ /* Proc file for showing shadow buffer status */
-+ static int shadow_buffer_proc_show(struct seq_file *m, void *v)
-+ {
-+     struct shadow_buffer_entry *sb;
-+     unsigned int read_idx, write_idx, count;
-+     
-+     seq_printf(m, "CAN Security Layer Status\n");
-+     seq_printf(m, "PID\tDevice\tFrames\tBuffered\tLast Activity\n");
-+     
-+     spin_lock(&sb_list_lock);
-+     list_for_each_entry(sb, &shadow_buffer_list, list) {
-+         if (sb->kernel_view) {
-+             read_idx = READ_ONCE(sb->kernel_view->header.read_idx);
-+             write_idx = READ_ONCE(sb->kernel_view->header.write_idx);
-+             count = READ_ONCE(sb->kernel_view->header.frame_count);
-+             
-+             /* Calculate buffered frames */
-+             int buffered = (write_idx >= read_idx) ? 
-+                           (write_idx - read_idx) : 
-+                           (MAX_SHADOW_FRAMES - read_idx + write_idx);
-+             
-+             seq_printf(m, "%d\t%s\t%u\t%d\t%lld ms\n",
-+                       sb->pid,
-+                       sb->dev->name,
-+                       count,
-+                       buffered,
-+                       ktime_to_ms(ktime_sub(ktime_get(), sb->last_activity)));
-+         }
-+     }
-+     spin_unlock(&sb_list_lock);
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * Create a shadow buffer for a process
-+  */
-+ static struct shadow_buffer_entry *create_shadow_buffer(struct task_struct *task, 
-+                                                      struct net_device *dev)
-+ {
-+     struct shadow_buffer_entry *sb;
-+     struct page *pages;
-+     void *kernel_addr, *kernel_ro_addr;
-+     unsigned long user_addr;
-+     int ret, num_pages, i;
-+     
-+     /* Calculate needed pages */
-+     num_pages = SHADOW_BUFFER_SIZE / PAGE_SIZE;
-+     if (SHADOW_BUFFER_SIZE % PAGE_SIZE)
-+         num_pages++;
-+     
-+     /* Allocate management structure */
-+     sb = kzalloc(sizeof(struct shadow_buffer_entry), GFP_KERNEL);
-+     if (!sb) {
-+         printk(KERN_ERR "CAN Security: Failed to allocate management structure\n");
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     
-+     /* Initialize structure */
-+     sb->pid = task_pid_nr(task);
-+     sb->task = task;
-+     sb->mm = task->mm;
-+     sb->num_pages = num_pages;
-+     sb->dev = dev;
-+     atomic_set(&sb->active, 1);
-+     sb->last_activity = ktime_get();
-+     spin_lock_init(&sb->lock);
-+     
-+     /* Allocate pages for buffer */
-+     pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(SHADOW_BUFFER_SIZE));
-+     if (!pages) {
-+         printk(KERN_ERR "CAN Security: Failed to allocate pages\n");
-+         kfree(sb);
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     sb->pages = pages;
-+     
-+     /* Get normal kernel mapping */
-+     kernel_addr = page_address(pages);
-+     
-+     /* Initialize buffer */
-+     memset(kernel_addr, 0, SHADOW_BUFFER_SIZE);
-+     
-+     /* Create a read-only kernel mapping */
-+     kernel_ro_addr = vmap(&pages, 1, VM_MAP, PAGE_KERNEL_RO);
-+     if (!kernel_ro_addr) {
-+         printk(KERN_ERR "CAN Security: Failed to create read-only mapping\n");
-+         __free_pages(pages, get_order(SHADOW_BUFFER_SIZE));
-+         kfree(sb);
-+         return ERR_PTR(-ENOMEM);
-+     }
-+     sb->kernel_view = (struct shadow_buffer *)kernel_ro_addr;
-+     
-+     /* Find unmapped area in process's address space */
-+     down_write(&task->mm->mmap_sem);
-+     user_addr = do_mmap(NULL, 0, SHADOW_BUFFER_SIZE, 
-+                       PROT_READ | PROT_WRITE, 
-+                       MAP_SHARED | MAP_ANONYMOUS, 
-+                       0);
-+     if (IS_ERR_VALUE(user_addr)) {
-+         up_write(&task->mm->mmap_sem);
-+         vunmap(kernel_ro_addr);
-+         __free_pages(pages, get_order(SHADOW_BUFFER_SIZE));
-+         kfree(sb);
-+         return ERR_PTR((int)user_addr);
-+     }
-+     
-+     /* Map the pages into the process's address space */
-+     for (i = 0; i < num_pages; i++) {
-+         ret = vm_insert_page(
-+             find_vma(task->mm, user_addr + (i * PAGE_SIZE)),
-+             user_addr + (i * PAGE_SIZE),
-+             pages + i
-+         );
-+         if (ret) {
-+             up_write(&task->mm->mmap_sem);
-+             vunmap(kernel_ro_addr);
-+             __free_pages(pages, get_order(SHADOW_BUFFER_SIZE));
-+             kfree(sb);
-+             return ERR_PTR(ret);
-+         }
-+     }
-+     up_write(&task->mm->mmap_sem);
-+     
-+     sb->user_addr = user_addr;
-+     sb->user_buffer = (struct shadow_buffer *)user_addr;
-+     
-+     /* Add to the global list */
-+     spin_lock(&sb_list_lock);
-+     list_add(&sb->list, &shadow_buffer_list);
-+     spin_unlock(&sb_list_lock);
-+     
-+     printk(KERN_INFO "CAN Security: Created shadow buffer for PID %d\n", sb->pid);
-+     
-+     return sb;
-+ }
-+ 
-+ /*
-+  * Find or create a shadow buffer for a process
-+  */
-+ static struct shadow_buffer_entry *get_shadow_buffer(struct task_struct *task, 
-+                                                  struct net_device *dev)
-+ {
-+     struct shadow_buffer_entry *sb = NULL;
-+     pid_t pid = task_pid_nr(task);
-+     int found = 0;
-+     
-+     /* Look for existing buffer */
-+     spin_lock(&sb_list_lock);
-+     list_for_each_entry(sb, &shadow_buffer_list, list) {
-+         if (sb->pid == pid && sb->dev == dev) {
-+             found = 1;
-+             sb->last_activity = ktime_get();
-+             break;
-+         }
-+     }
-+     spin_unlock(&sb_list_lock);
-+     
-+     if (found)
-+         return sb;
-+     
-+     /* Create new buffer */
-+     return create_shadow_buffer(task, dev);
-+ }
-+ 
-+ /*
-+  * Clean up a shadow buffer
-+  */
-+ static void cleanup_shadow_buffer(struct shadow_buffer_entry *sb)
-+ {
-+     if (!sb)
-+         return;
-+     
-+     /* Remove from list */
-+     spin_lock(&sb_list_lock);
-+     list_del(&sb->list);
-+     spin_unlock(&sb_list_lock);
-+     
-+     /* Unmap kernel read-only view */
-+     if (sb->kernel_view)
-+         vunmap(sb->kernel_view);
-+     
-+     /* Free pages */
-+     if (sb->pages)
-+         __free_pages(sb->pages, get_order(SHADOW_BUFFER_SIZE));
-+     
-+     kfree(sb);
-+ }
-+ 
-+ /*
-+  * Process shadow buffers and send frames
-+  */
-+ static int process_shadow_buffers(void *data)
-+ {
-+     struct shadow_buffer_entry *sb, *tmp;
-+     struct can_frame frame;
-+     struct sk_buff *skb;
-+     unsigned int read_idx, write_idx;
-+     int processed;
-+     
-+     while (!kthread_should_stop()) {
-+         processed = 0;
-+         
-+         /* Process all shadow buffers */
-+         spin_lock(&sb_list_lock);
-+         list_for_each_entry_safe(sb, tmp, &shadow_buffer_list, list) {
-+             /* Skip inactive buffers */
-+             if (!atomic_read(&sb->active))
-+                 continue;
-+             
-+             /* Check if process still exists */
-+             if (!pid_task(find_vpid(sb->pid), PIDTYPE_PID)) {
-+                 list_del(&sb->list);
-+                 cleanup_shadow_buffer(sb);
-+                 continue;
-+             }
-+             
-+             /* Get buffer indices */
-+             read_idx = READ_ONCE(sb->kernel_view->header.read_idx);
-+             write_idx = READ_ONCE(sb->kernel_view->header.write_idx);
-+             
-+             /* Skip if empty */
-+             if (read_idx == write_idx)
-+                 continue;
-+             
-+             /* Process up to 8 frames */
-+             while (read_idx != write_idx && processed < 8) {
-+                 /* Copy frame from read-only buffer */
-+                 memcpy(&frame, &sb->kernel_view->frames[read_idx], sizeof(struct can_frame));
-+                 
-+                 /* Move read index */
-+                 read_idx = (read_idx + 1) % MAX_SHADOW_FRAMES;
-+                 
-+                 /* Update read index in the actual buffer (writable kernel mapping) */
-+                 WRITE_ONCE(((struct shadow_buffer *)page_address(sb->pages))->header.read_idx, read_idx);
-+                 
-+                 /* Send the frame */
-+                 skb = alloc_can_skb(sb->dev, &frame);
-+                 if (!skb)
-+                     continue;
-+                 
-+                 /* Call the netdev transmit function directly */
-+                 sb->dev->netdev_ops->ndo_start_xmit(skb, sb->dev);
-+                 
-+                 /* Update statistics */
-+                 processed++;
-+                 WRITE_ONCE(((struct shadow_buffer *)page_address(sb->pages))->header.frame_count,
-+                            READ_ONCE(sb->kernel_view->header.frame_count) + 1);
-+             }
-+             
-+             /* Check for inactivity */
-+             if (ktime_after(ktime_get(), ktime_add_ms(sb->last_activity, 60000))) {
-+                 list_del(&sb->list);
-+                 cleanup_shadow_buffer(sb);
-+             }
-+         }
-+         spin_unlock(&sb_list_lock);
-+         
-+         /* Sleep if no frames processed */
-+         if (processed == 0) {
-+             wait_event_interruptible_timeout(
-+                 processing_wait,
-+                 kthread_should_stop(),
-+                 msecs_to_jiffies(10)
-+             );
-+         } else {
-+             /* Small delay to prevent CPU hogging */
-+             usleep_range(100, 200);
-+         }
-+     }
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * Modified sendmsg function for CAN raw sockets
-+  * This is where we intercept the socket write and redirect to shadow buffer
-+  */
-+ static int can_raw_sendmsg_shadow(struct socket *sock, struct msghdr *msg, size_t size)
-+ {
-+     struct sock *sk = sock->sk;
-+     struct can_sock_shadow *css = (struct can_sock_shadow *)sk;
-+     struct can_frame frame;
-+     struct shadow_buffer_entry *sb;
-+     unsigned int write_idx, next_write_idx, read_idx;
-+     struct net_device *dev;
-+     int err;
-+     
-+     /* Make sure we have a shadow buffer initialized */
-+     if (!atomic_read(&css->initialized)) {
-+         /* Get the associated device */
-+         dev = dev_get_by_index(sock_net(sk), css->cs.ifindex);
-+         if (!dev)
-+             return -ENXIO;
-+         
-+         /* Create shadow buffer */
-+         sb = get_shadow_buffer(current, dev);
-+         dev_put(dev);
-+         
-+         if (IS_ERR(sb))
-+             return PTR_ERR(sb);
-+         
-+         css->sb = sb;
-+         atomic_set(&css->initialized, 1);
-+     } else {
-+         sb = css->sb;
-+     }
-+     
-+     /* Validate size */
-+     if (size != sizeof(struct can_frame))
-+         return -EINVAL;
-+     
-+     /* Copy frame from user space */
-+     if (copy_from_msg(&frame, msg, sizeof(struct can_frame)) != sizeof(struct can_frame))
-+         return -EFAULT;
-+     
-+     /* Update last activity timestamp */
-+     sb->last_activity = ktime_get();
-+     
-+     /* Check shadow buffer indices */
-+     read_idx = READ_ONCE(sb->kernel_view->header.read_idx);
-+     write_idx = READ_ONCE(sb->kernel_view->header.write_idx);
-+     next_write_idx = (write_idx + 1) % MAX_SHADOW_FRAMES;
-+     
-+     /* Check if buffer is full */
-+     if (next_write_idx == read_idx) {
-+         /* Wake processing thread */
-+         wake_up(&processing_wait);
-+         
-+         /* Wait for space */
-+         usleep_range(100, 200);
-+         
-+         /* Re-read indices */
-+         read_idx = READ_ONCE(sb->kernel_view->header.read_idx);
-+         next_write_idx = (write_idx + 1) % MAX_SHADOW_FRAMES;
-+         
-+         /* Still full? */
-+         if (next_write_idx == read_idx)
-+             return -EAGAIN;
-+     }
-+     
-+     /* Write frame directly to user-space buffer */
-+     err = put_user_pages(current->mm, (unsigned long)&sb->user_buffer->frames[write_idx],
-+                         &frame, sizeof(struct can_frame));
-+     if (err)
-+         return err;
-+     
-+     /* Update write index */
-+     err = put_user_pages(current->mm, (unsigned long)&sb->user_buffer->header.write_idx,
-+                         &next_write_idx, sizeof(next_write_idx));
-+     if (err)
-+         return err;
-+     
-+     /* Wake processing thread if getting full */
-+     if ((next_write_idx + 1) % MAX_SHADOW_FRAMES == read_idx)
-+         wake_up(&processing_wait);
-+     
-+     return sizeof(struct can_frame);
-+ }
-+ 
-+ /*
-+  * Initialize the security layer
-+  */
-+ int can_security_init(void)
-+ {
-+     struct proto_ops *ops;
-+     struct proc_dir_entry *proc_dir, *proc_entry;
-+     
-+     printk(KERN_INFO "CAN Security Layer: Initializing\n");
-+     
-+     /* Create processing thread */
-+     processing_thread = kthread_run(process_shadow_buffers, NULL, "can_security");
-+     if (IS_ERR(processing_thread)) {
-+         printk(KERN_ERR "CAN Security: Failed to create processing thread\n");
-+         return PTR_ERR(processing_thread);
-+     }
-+     
-+     /* Hook CAN raw socket sendmsg */
-+     ops = (struct proto_ops *)&can_raw_ops;
-+     original_can_raw_sendmsg = ops->sendmsg;
-+     ((struct proto_ops *)&can_raw_ops)->sendmsg = can_raw_sendmsg_shadow;
-+     
-+     /* Create proc entries */
-+     proc_dir = proc_mkdir("can_security", NULL);
-+     if (proc_dir) {
-+         proc_entry = proc_create("buffers", 0444, proc_dir, &shadow_buffer_proc_fops);
-+     }
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * Clean up the security layer
-+  */
-+ void can_security_cleanup(void)
-+ {
-+     struct shadow_buffer_entry *sb, *tmp;
-+     
-+     printk(KERN_INFO "CAN Security Layer: Cleaning up\n");
-+     
-+     /* Restore original sendmsg */
-+     if (original_can_raw_sendmsg)
-+         ((struct proto_ops *)&can_raw_ops)->sendmsg = original_can_raw_sendmsg;
-+     
-+     /* Stop processing thread */
-+     if (processing_thread && !IS_ERR(processing_thread))
-+         kthread_stop(processing_thread);
-+     
-+     /* Clean up all shadow buffers */
-+     spin_lock(&sb_list_lock);
-+     list_for_each_entry_safe(sb, tmp, &shadow_buffer_list, list) {
-+         list_del(&sb->list);
-+         cleanup_shadow_buffer(sb);
-+     }
-+     spin_unlock(&sb_list_lock);
-+     
-+     /* Remove proc entries */
-+     remove_proc_entry("buffers", proc_mkdir("can_security", NULL));
-+     remove_proc_entry("can_security", NULL);
-+ }
-+ 
-+ /* Helper function to write to user memory */
-+ static int put_user_pages(struct mm_struct *mm, unsigned long addr,
-+                         void *src, size_t size)
-+ {
-+     int ret;
-+     
-+     /* Lock mm semaphore */
-+     down_read(&mm->mmap_sem);
-+     
-+     /* Copy data to user space */
-+     ret = access_process_vm(current, addr, src, size, 1);
-+     
-+     /* Unlock semaphore */
-+     up_read(&mm->mmap_sem);
-+     
-+     return ret == size ? 0 : -EFAULT;
-+ }
-+ 
-+ /* Module entry and exit points */
-+ module_init(can_security_init);
-+ module_exit(can_security_cleanup);
-+ 
-+ MODULE_LICENSE("GPL");
-+ MODULE_AUTHOR("SORHTA CAN Security Layer");
-+ MODULE_DESCRIPTION("Security layer for CAN with process-owned shadow buffers");
-+ MODULE_VERSION("1.0");
-\ No newline at end of file
-diff --git a/drivers/net/can/sorhta/sorhta_can_security_policy.c b/drivers/net/can/sorhta/sorhta_can_security_policy.c
-new file mode 100644
-index 000000000000..4e03b87c5199
---- /dev/null
-+++ b/drivers/net/can/sorhta/sorhta_can_security_policy.c
-@@ -0,0 +1,181 @@
-+/* 
-+ * can_security_policy.c
-+ * Security policy enforcement for CAN frames
-+ */
-+
-+ #include <linux/module.h>
-+ #include <linux/kernel.h>
-+ #include <linux/init.h>
-+ #include <linux/can.h>
-+ #include <linux/slab.h>
-+ #include <linux/list.h>
-+ #include <linux/spinlock.h>
-+ #include <linux/pid.h>
-+ #include <linux/sched.h>
-+ 
-+ #include "sorhta_can_security.h"
-+ 
-+ /* Policy rule structure */
-+ struct can_security_rule {
-+     struct list_head list;
-+     pid_t pid;                  /* Process ID */
-+     unsigned int can_id_start;  /* Start of allowed CAN ID range */
-+     unsigned int can_id_end;    /* End of allowed CAN ID range */
-+     unsigned int flags;         /* Policy flags */
-+ };
-+ 
-+ /* Global policy list */
-+ static LIST_HEAD(security_policy_list);
-+ static DEFINE_SPINLOCK(policy_lock);
-+ 
-+ /* Default policy: allow all */
-+ static int default_policy = 1;  /* 1=allow, 0=deny */
-+ 
-+ /*
-+  * Initialize security policy subsystem
-+  */
-+ int can_security_policy_init(void)
-+ {
-+     printk(KERN_INFO "CAN Security: Initializing security policy framework\n");
-+     
-+     /* Initialize with default policy */
-+     default_policy = 1;  /* Default to allow-all */
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * Clean up security policy subsystem
-+  */
-+ void can_security_policy_cleanup(void)
-+ {
-+     struct can_security_rule *rule, *tmp;
-+     
-+     printk(KERN_INFO "CAN Security: Cleaning up security policy framework\n");
-+     
-+     /* Free all policy rules */
-+     spin_lock(&policy_lock);
-+     list_for_each_entry_safe(rule, tmp, &security_policy_list, list) {
-+         list_del(&rule->list);
-+         kfree(rule);
-+     }
-+     spin_unlock(&policy_lock);
-+ }
-+ 
-+ /*
-+  * Add a security policy rule
-+  */
-+ int can_security_add_rule(pid_t pid, unsigned int id_start, unsigned int id_end, unsigned int flags)
-+ {
-+     struct can_security_rule *rule;
-+     
-+     rule = kmalloc(sizeof(struct can_security_rule), GFP_KERNEL);
-+     if (!rule)
-+         return -ENOMEM;
-+     
-+     /* Initialize rule */
-+     rule->pid = pid;
-+     rule->can_id_start = id_start;
-+     rule->can_id_end = id_end;
-+     rule->flags = flags;
-+     
-+     /* Add to policy list */
-+     spin_lock(&policy_lock);
-+     list_add(&rule->list, &security_policy_list);
-+     spin_unlock(&policy_lock);
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * Remove all rules for a process
-+  */
-+ void can_security_remove_rules(pid_t pid)
-+ {
-+     struct can_security_rule *rule, *tmp;
-+     
-+     spin_lock(&policy_lock);
-+     list_for_each_entry_safe(rule, tmp, &security_policy_list, list) {
-+         if (rule->pid == pid) {
-+             list_del(&rule->list);
-+             kfree(rule);
-+         }
-+     }
-+     spin_unlock(&policy_lock);
-+ }
-+ 
-+ /*
-+  * Set default policy
-+  */
-+ void can_security_set_default_policy(int allow)
-+ {
-+     default_policy = allow ? 1 : 0;
-+ }
-+ 
-+ /*
-+  * Check if a frame is allowed by security policy
-+  */
-+ int can_security_check_frame(pid_t pid, struct can_frame *frame)
-+ {
-+     struct can_security_rule *rule;
-+     int matched = 0;
-+     int allowed = default_policy;
-+     unsigned int can_id;
-+     
-+     /* Extract the actual CAN ID without flags */
-+     can_id = frame->can_id & CAN_EFF_MASK;
-+     
-+     /* Check against policy rules */
-+     spin_lock(&policy_lock);
-+     list_for_each_entry(rule, &security_policy_list, list) {
-+         /* Skip rules for other processes */
-+         if (rule->pid != pid && rule->pid != 0)
-+             continue;
-+         
-+         /* Check if CAN ID is in range */
-+         if (can_id >= rule->can_id_start && can_id <= rule->can_id_end) {
-+             matched = 1;
-+             allowed = 1;  /* Explicit allow rule matched */
-+             break;
-+         }
-+     }
-+     spin_unlock(&policy_lock);
-+     
-+     /* If matched a rule, use that result, otherwise use default policy */
-+     return allowed ? 0 : -EPERM;
-+ }
-+ 
-+ /* 
-+  * Get process policy status (for debugging)
-+  */
-+ int can_security_get_process_status(pid_t pid, char *buf, size_t size)
-+ {
-+     struct can_security_rule *rule;
-+     int len = 0;
-+     
-+     len += snprintf(buf + len, size - len, "Policy for PID %d:\n", pid);
-+     
-+     spin_lock(&policy_lock);
-+     list_for_each_entry(rule, &security_policy_list, list) {
-+         if (rule->pid == pid || rule->pid == 0) {
-+             len += snprintf(buf + len, size - len, 
-+                            "  CAN IDs %08x-%08x: allowed\n", 
-+                            rule->can_id_start, rule->can_id_end);
-+         }
-+     }
-+     spin_unlock(&policy_lock);
-+     
-+     if (len == 0) {
-+         len += snprintf(buf, size, "No specific rules. Default policy: %s\n",
-+                       default_policy ? "allow" : "deny");
-+     }
-+     
-+     return len;
-+ }
-+ 
-+ EXPORT_SYMBOL(can_security_check_frame);
-+ EXPORT_SYMBOL(can_security_policy_init);
-+ EXPORT_SYMBOL(can_security_policy_cleanup);
-+ EXPORT_SYMBOL(can_security_add_rule);
-+ EXPORT_SYMBOL(can_security_remove_rules);
-+ EXPORT_SYMBOL(can_security_set_default_policy);
-\ No newline at end of file
-diff --git a/drivers/net/can/sorhta/sorhta_can_security_socket.c b/drivers/net/can/sorhta/sorhta_can_security_socket.c
-new file mode 100644
-index 000000000000..5db4f8b62d76
---- /dev/null
-+++ b/drivers/net/can/sorhta/sorhta_can_security_socket.c
-@@ -0,0 +1,207 @@
-+/*
-+ * Socket Layer Hook for CAN Security
-+ * 
-+ * This file implements the socket layer hook to intercept CAN transmissions
-+ * and redirect them to process-owned shadow buffers.
-+ */
-+
-+ #include <linux/module.h>
-+ #include <linux/kernel.h>
-+ #include <linux/init.h>
-+ #include <linux/net.h>
-+ #include <linux/if_arp.h>
-+ #include <linux/can.h>
-+ #include <linux/can/core.h>
-+ #include <linux/can/raw.h>
-+ #include <linux/socket.h>
-+ #include <linux/netdevice.h>
-+ #include <net/sock.h>
-+ 
-+ #include "sorhta_can_security.h"
-+ 
-+ /* Original CAN socket operations */
-+ static const struct proto_ops *original_raw_ops = NULL;
-+ 
-+ /* Extended CAN socket structure */
-+ struct can_sock_secure {
-+     struct can_sock cs;                /* Base CAN socket structure */
-+     struct shadow_buffer_entry *sb;    /* Associated shadow buffer */
-+     atomic_t initialized;              /* Flag for lazy initialization */
-+ };
-+ 
-+ /* Forward declarations */
-+ static int can_raw_sendmsg_secure(struct socket *sock, struct msghdr *msg, size_t size);
-+ static int can_raw_release_secure(struct socket *sock);
-+ 
-+ /* Modified CAN raw socket operations */
-+ static struct proto_ops can_raw_secure_ops;
-+ 
-+ /*
-+  * Initialize socket hook
-+  */
-+ int can_security_socket_init(void)
-+ {
-+     printk(KERN_INFO "CAN Security: Initializing socket hook\n");
-+     
-+     /* Save original operations */
-+     original_raw_ops = &can_raw_ops;
-+     
-+     /* Create our modified operations */
-+     memcpy(&can_raw_secure_ops, original_raw_ops, sizeof(struct proto_ops));
-+     
-+     /* Replace sendmsg and release functions */
-+     can_raw_secure_ops.sendmsg = can_raw_sendmsg_secure;
-+     can_raw_secure_ops.release = can_raw_release_secure;
-+     
-+     /* Install our modified operations */
-+     *(struct proto_ops *)&can_raw_ops = can_raw_secure_ops;
-+     
-+     return 0;
-+ }
-+ 
-+ /*
-+  * Clean up socket hook
-+  */
-+ void can_security_socket_cleanup(void)
-+ {
-+     printk(KERN_INFO "CAN Security: Cleaning up socket hook\n");
-+     
-+     /* Restore original operations */
-+     if (original_raw_ops) {
-+         *(struct proto_ops *)&can_raw_ops = *original_raw_ops;
-+     }
-+ }
-+ 
-+ /*
-+  * Modified sendmsg function that redirects to shadow buffer
-+  */
-+ static int can_raw_sendmsg_secure(struct socket *sock, struct msghdr *msg, size_t size)
-+ {
-+     struct sock *sk = sock->sk;
-+     struct can_sock_secure *cs_secure = (struct can_sock_secure *)sk;
-+     struct can_frame frame;
-+     struct shadow_buffer_entry *sb;
-+     unsigned int write_idx, next_write_idx, read_idx;
-+     struct net_device *dev;
-+     int err;
-+     
-+     /* Validate size */
-+     if (size != sizeof(struct can_frame)) {
-+         return -EINVAL;
-+     }
-+     
-+     /* Copy frame from user */
-+     if (copy_from_user(&frame, msg->msg_iov->iov_base, sizeof(struct can_frame))) {
-+         return -EFAULT;
-+     }
-+     
-+     /* Make sure we have a shadow buffer */
-+     if (!atomic_read(&cs_secure->initialized)) {
-+         /* Get the CAN device */
-+         dev = dev_get_by_index(sock_net(sk), cs_secure->cs.ifindex);
-+         if (!dev) {
-+             return -ENXIO;
-+         }
-+         
-+         /* Get or create shadow buffer */
-+         sb = shadow_buffer_get(current, dev);
-+         dev_put(dev);
-+         
-+         if (IS_ERR(sb)) {
-+             return PTR_ERR(sb);
-+         }
-+         
-+         cs_secure->sb = sb;
-+         atomic_set(&cs_secure->initialized, 1);
-+     } else {
-+         sb = cs_secure->sb;
-+     }
-+     
-+     /* Get current buffer indices */
-+     read_idx = smp_load_acquire(&sb->kernel_view->header.read_idx);
-+     write_idx = smp_load_acquire(&sb->kernel_view->header.write_idx);
-+     next_write_idx = (write_idx + 1) % MAX_SHADOW_FRAMES;
-+     
-+     /* Check if buffer is full */
-+     if (next_write_idx == read_idx) {
-+         /* Wake processing thread */
-+         wake_up(&sb_processing_wait);
-+         
-+         /* Give it time to process */
-+         msleep(1);
-+         
-+         /* Re-check if space available */
-+         read_idx = smp_load_acquire(&sb->kernel_view->header.read_idx);
-+         next_write_idx = (write_idx + 1) % MAX_SHADOW_FRAMES;
-+         
-+         if (next_write_idx == read_idx) {
-+             return -EAGAIN;
-+         }
-+     }
-+     
-+     /* Write frame to user buffer */
-+     if (copy_to_user(&sb->user_buffer->frames[write_idx], &frame, sizeof(struct can_frame))) {
-+         return -EFAULT;
-+     }
-+     
-+     /* Update write index with memory barrier */
-+     if (copy_to_user(&sb->user_buffer->header.write_idx, &next_write_idx, sizeof(next_write_idx))) {
-+         return -EFAULT;
-+     }
-+     
-+     /* Memory barrier to ensure visibility */
-+     smp_mb();
-+     
-+     /* Update activity timestamp */
-+     sb->last_activity = ktime_get();
-+     
-+     /* Wake processing thread if buffer is getting full */
-+     if ((write_idx + 2) % MAX_SHADOW_FRAMES == read_idx) {
-+         wake_up(&sb_processing_wait);
-+     }
-+     
-+     return sizeof(struct can_frame);
-+ }
-+ 
-+ /*
-+  * Modified release function to clean up shadow buffer
-+  */
-+ static int can_raw_release_secure(struct socket *sock)
-+ {
-+     struct sock *sk = sock->sk;
-+     struct can_sock_secure *cs_secure = (struct can_sock_secure *)sk;
-+     
-+     /* Clean up shadow buffer if initialized */
-+     if (atomic_read(&cs_secure->initialized)) {
-+         shadow_buffer_release(cs_secure->sb);
-+     }
-+     
-+     /* Call original release function */
-+     return original_raw_ops->release(sock);
-+ }
-+ 
-+ /*
-+  * Create and register a secure CAN socket
-+  */
-+ int can_security_create_socket(struct net *net, struct socket *sock, int protocol, int kern)
-+ {
-+     struct sock *sk;
-+     struct can_sock_secure *cs_secure;
-+     int err;
-+     
-+     /* Call original create function */
-+     err = original_raw_ops->create(net, sock, protocol, kern);
-+     if (err < 0) {
-+         return err;
-+     }
-+     
-+     /* Get socket and convert to our extended structure */
-+     sk = sock->sk;
-+     cs_secure = (struct can_sock_secure *)sk;
-+     
-+     /* Initialize secure socket fields */
-+     cs_secure->sb = NULL;
-+     atomic_set(&cs_secure->initialized, 0);
-+     
-+     return 0;
-+ }
-\ No newline at end of file
++// SECV:
++int secv_alloc_can_buffer_rec(struct task_struct *task);
++void secv_free_can_buffer_rec(struct task_struct *task);
++struct canfd_frame* secv_task_alloc_frame_buffer(u_int64_t*);
++void secv_task_free_frame_buffer(void* frame);
++struct sk_buff* secv_sock_alloc_send_skb(struct sock *sk, int noblock, int *errcode);
+ #endif /* AF_CAN_H */
 diff --git a/net/can/raw.c b/net/can/raw.c
-index d50c3f3d892f..caf58b43ab52 100644
+index d50c3f3d892f..32590d1562db 100644
 --- a/net/can/raw.c
 +++ b/net/can/raw.c
-@@ -864,6 +864,7 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
+@@ -56,6 +56,9 @@
+ #include <net/sock.h>
+ #include <net/net_namespace.h>
+ 
++// SECV: declarations.
++#include "af_can.h"
++
+ MODULE_DESCRIPTION("PF_CAN raw protocol");
+ MODULE_LICENSE("Dual BSD/GPL");
+ MODULE_AUTHOR("Urs Thuermann <urs.thuermann@volkswagen.de>");
+@@ -830,6 +833,9 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
+ 	struct sockcm_cookie sockc;
+ 	struct sk_buff *skb;
+ 	struct net_device *dev;
++	struct canfd_frame* secure_frame;
++	struct canfd_frame* data;
++	u_int64_t secure_phys_addr;
+ 	int ifindex;
+ 	int err = -EINVAL;
+ 
+@@ -855,11 +861,20 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
+ 	if (!dev)
+ 		return -ENXIO;
+ 
++	// SECV: instead of allocating the CAN buffer from the outer kernel space,
++	secure_frame = secv_task_alloc_frame_buffer(&secure_phys_addr);
++	if(secure_frame == NULL) {
++		//printk(KERN_ALERT "Failed to allocate frame: 0x%lx 0x%lx\n", (unsigned long)secure_frame, (unsigned long)secure_phys_addr);
++		return -ENOMEM;
++	}
++
+ 	skb = sock_alloc_send_skb(sk, size + sizeof(struct can_skb_priv),
+-				  msg->msg_flags & MSG_DONTWAIT, &err);
++	 			  msg->msg_flags & MSG_DONTWAIT, &err);
+ 	if (!skb)
+ 		goto put_dev;
+ 
++	//printk(KERN_ALERT "Allocated skb and built it: 0x%lx 0x%lx\n", (unsigned long)secure_frame, (unsigned long)secure_phys_addr);
++
+ 	can_skb_reserve(skb);
  	can_skb_prv(skb)->ifindex = dev->ifindex;
  	can_skb_prv(skb)->skbcnt = 0;
- 
-+	printk(KERN_ALERT "Sending frame\n");
- 	/* fill the skb before testing for valid CAN frames */
- 	err = memcpy_from_msg(skb_put(skb, size), msg, size);
+@@ -869,6 +884,17 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
  	if (err < 0)
+ 		goto free_skb;
+ 
++	// SECV: hack! just copy from the placed skb,
++	// TODO: this is not safe, must be done inside inner kernel.
++	//copy_to_user((void*)secure_frame, (void*)skb->data, sizeof(struct canfd_frame));
++	memcpy((void*)secure_frame, (void*)skb->data, sizeof(struct canfd_frame));
++	// this is safe though! can't fake physical addr-to-secure frame mapping if 
++	// if above is done safely. We will simply avoid further switches to&from inner kernel
++	// set flags at the end of this.
++	data = (struct canfd_frame*)skb->data;
++	*((u_int64_t*)&data->data[0]) = secure_phys_addr;
++	//*((u_int64_t*)((struct canfd_frame*)skb->data)->data) = secure_phys_addr;
++
+ 	err = -EINVAL;
+ 	if (raw_bad_txframe(ro, skb, dev->mtu))
+ 		goto free_skb;
+diff --git a/security/secv/Kconfig b/security/secv/Kconfig
+new file mode 100644
+index 000000000000..e3121c96b14f
+--- /dev/null
++++ b/security/secv/Kconfig
+@@ -0,0 +1,13 @@
++# SECV:
++config SECURITY_SECV_PROCESS_EXIT
++	bool "Process Exit Monitoring LSM by SECV"
++	depends on SECURITY
++	default y
++	help
++	  This LSM module monitors process exit events to support
++      enforcement of SECV policies when processes terminate.
++	  
++	  The module hooks into the task_exit and task_free security
++	  hooks to track process termination.
++	  
++	  If you are unsure how to answer this question, answer N.
+\ No newline at end of file
+diff --git a/security/secv/exit_lsm.c b/security/secv/exit_lsm.c
+new file mode 100644
+index 000000000000..d0f8a8b7fbc6
+--- /dev/null
++++ b/security/secv/exit_lsm.c
+@@ -0,0 +1,52 @@
++/**
++ * SECV Process Exit hook.
++ * This should free the pid mapping in the SSMe.
++ * For security, this should be run in the inner kernel.
++ */
++#include <linux/lsm.h>
++#include <linux/security.h>
++#include <linux/sched.h>
++#include <linux/binfmts.h>
++
++
++#define MODULE_NAME "SECV_exit_lsm"
++
++static void secv_task_exit(struct task_struct* task) 
++{
++    if(!(task->flags & PF_KTHREAD)) {
++        pr_info("%s: Process '%s' (PID: %d, TGID: %d) exiting with code: %d\n",
++        MODULE_NAME,
++        task->comm,
++        task->pid,
++        task->tgid,
++        task->exit_code >> 8);  /* Extract actual exit code */
++    }
++}
++
++static void secv_task_free(struct task_struct* task)
++{
++     pr_debug("%s: Task structure for '%s' (PID: %d) being freed\n",
++             MODULE_NAME, task->comm, task->pid);
++}
++
++/* Define the LSM hooks */
++static struct security_hook_list secv_hooks[] __lsm_ro_after_init = {
++    LSM_HOOK_INIT(task_exit, secv_task_exit),
++    LSM_HOOK_INIT(task_free, secv_task_free),
++};
++
++static int __init secv_task_exit_module_init(void)
++{
++    pr_info("%s: Initializing LSM module\n", MODULE_NAME);
++    
++    /* Register the security hooks */
++    security_add_hooks(secv_hooks, ARRAY_SIZE(secv_hooks), MODULE_NAME);
++    
++    return 0;
++}
++
++/* Required LSM structure */
++DEFINE_LSM(secv_exit_module) = {
++    .name = MODULE_NAME,
++    .init = secv_task_exit_module_init,
++};
+\ No newline at end of file
