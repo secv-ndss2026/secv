@@ -1236,10 +1236,10 @@ index 77f01ac385f7..4a2b1a33ea0e 100644
  static inline struct pid *task_pid(struct task_struct *task)
 diff --git a/include/linux/secv/secv_idc.h b/include/linux/secv/secv_idc.h
 new file mode 100644
-index 000000000000..764c778d0972
+index 000000000000..75f9150385ff
 --- /dev/null
 +++ b/include/linux/secv/secv_idc.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,109 @@
 +#ifndef _SECV_IDC_H_
 +#define _SECV_IDC_H_
 +
@@ -1250,6 +1250,7 @@ index 000000000000..764c778d0972
 +#include <linux/preempt.h>
 +#include <linux/irqflags.h>
 +#include <linux/types.h>
++#include <linux/compiler_types.h>
 +
 +#include <linux/init.h>
 +#include <linux/gfp.h>
@@ -1290,17 +1291,15 @@ index 000000000000..764c778d0972
 +#define __shadow_to_virt(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET + PAGE_OFFSET)
 +#define __shadow_to_phys(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET)
 +
-+#define __inner __section(.text.inner)
-+
-+extern char __task_text_start[], __task_text_end[];
-+#define __secv_tsk  __section(.text.task)
++#define __inner    __attribute__((__section__(".text.inner")))
++#define __secv_tsk __attribute__((__section__(".text.task")))
 +
 +extern unsigned long ptp_start_pfn;
 +extern unsigned long ptp_end_pfn;
 +#define ZONE_PTP_PFN 0x40000 
 +
 +extern char __inner_text_start[], __inner_text_end[];
-+
++extern char __task_text_start[], __task_text_end[];
 +/*
 + * INNER KERNEL STACK
 + */
