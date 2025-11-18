@@ -194,7 +194,7 @@ index 14be5000c5a0..aedb3851f6f8 100644
 -				    (from), (n));			\
 -	uaccess_ttbr0_disable();					\
 -	__actu_ret;							\
-+({									\
++({									\						
 +	secv_raw_copy_to_user_wrapper(to, from, n);  \
  })
  
@@ -514,39 +514,6 @@ index 000000000000..a026eae0854f
 +}
 +EXPORT_SYMBOL(inner_domain_handler);
 \ No newline at end of file
-diff --git a/include/linux/secv/secv_hooks.h b/include/linux/secv/secv_hooks.h
-new file mode 100644
-index 000000000000..51aa6ea6fbc6
---- /dev/null
-+++ b/include/linux/secv/secv_hooks.h
-@@ -0,0 +1,26 @@
-+/* 
-+ * redirect existing functions to wrapper functions
-+ */
-+
-+#ifndef __LINUX_SECV_HOOKS_H__
-+#define __LINUX_SECV_HOOKS_H__
-+
-+#pragma once
-+#if !defined(__VDSO__) && !defined(__ASSEMBLY__)
-+
-+#include <linux/atomic.h>
-+#include <linux/percpu.h>
-+#include <linux/uaccess.h>
-+#include <asm/pgtable-types.h>
-+#include <linux/mm_types.h>
-+
-+struct mm_struct;
-+struct vm_area_struct;
-+
-+int secv_copy_mm(unsigned long clone_flags, struct task_struct *tsk);
-+int secv_load_elf_binary(struct linux_binprm *bprm);
-+asmlinkage void noinstr el1h_64_irq_handler(struct pt_regs *regs);
-+extern void schedule_idle(void);
-+
-+#endif 
-+#endif
-\ No newline at end of file
 diff --git a/arch/arm64/kernel/secv/secv_flag.c b/arch/arm64/kernel/secv/secv_flag.c
 new file mode 100644
 index 000000000000..f070c1dd11e9
@@ -558,6 +525,102 @@ index 000000000000..f070c1dd11e9
 +
 +DEFINE_PER_CPU(u64, __secv_idc_flags_mask);
 +EXPORT_SYMBOL(__secv_idc_flags_mask);
+\ No newline at end of file
+diff --git a/arch/arm64/kernel/secv/secv_idc.S b/arch/arm64/kernel/secv/secv_idc.S
+new file mode 100644
+index 000000000000..ee01e3e15012
+--- /dev/null
++++ b/arch/arm64/kernel/secv/secv_idc.S
+@@ -0,0 +1,89 @@
++/**
++ * Inner Domain Call (IDC)
++ *
++ * @param cmd a command -> ex: what action does inner domain handler take?
++ * @param [arg0-arg3] four parameters -> arguments for cmd => ex: cmd(arg0 = x0, arg0 = x1, arg1 = x2, arg2 = x3, arg3 = x4)
++ */
++
++#include <linux/linkage.h>
++#include <asm/sysreg.h>
++
++.global IDC
++.extern inner_domain_handler
++.extern inner_domain_stack
++
++IDC:
++    /* The entry gate */
++    mrs x5, DAIF    
++    stp x30, x5, [sp, #-16]!            
++    msr DAIFset, 0x3
++
++1:
++    mrs_s   x5,  SYS_TCR_EL1
++    mov     x9, #25
++    bfi     x5, x9, #16, #6     
++    mov     x9, #(1 << 22)
++    orr     x5, x5, x9       
++    msr_s   SYS_TCR_EL1, x5
++    isb
++    mrs_s   x5,  SYS_TCR_EL1 
++
++    /* Check the TCR value */
++    mrs_s   x10,  SYS_TCR_EL1
++    ubfx    x11, x10, #16, #6       
++    cmp     x11, #25
++    b.ne    1b
++    
++    /* per-CPU inner stack */
++    mrs x6, mpidr_el1 
++    ubfx x5, x6, #8, #4
++    and x6, x6, #0xf
++    orr x6, x6, x5, lsl #2
++    add x6, x6, #1 
++
++    /* switch to the inner domain stack */
++    adrp x5, inner_domain_stack 
++    add x5, x5, :lo12:inner_domain_stack 
++    add x5, x5, x6, lsl #12
++
++    mov x6, sp 
++    mov sp, x5 
++    str x6, [sp, #-16]! 
++    
++    /* invoke inner domain handler with parsed arguments from IDC */
++    adrp x7, inner_domain_handler
++    add x7, x7, :lo12:inner_domain_handler
++    blr x7 
++
++    /* The exit gate */
++    ldr x6, [sp], #16
++    mov sp, x6 
++
++2:
++    /* Set TCR.T1SZ to 27  
++    mrs_s   x5,  SYS_TCR_EL1
++
++    mov     x9, #27
++    bfi     x5, x9, #16, #6       
++
++    //mov     x9, #(1 << 22)
++    //bic     x5, x5, x9            
++
++    msr_s   SYS_TCR_EL1, x5
++    isb
++    mrs_s   x5,  SYS_TCR_EL1
++
++    //verify TCR
++    mrs_s   x10,  SYS_TCR_EL1
++    ubfx    x11, x10, #16, #6
++    ubfx    x12, x10, #22, #1
++    cmp     x11, #27
++    b.ne    2b
++    cbnz    x12, 2b
++   */
++
++    ldp x30, x5, [sp], #16 
++    msr DAIF, x5
++    isb
++    ret 
++EXPORT_SYMBOL(IDC)
 \ No newline at end of file
 diff --git a/arch/arm64/kernel/vmlinux.lds.S b/arch/arm64/kernel/vmlinux.lds.S
 index 3cd7e76cc562..25f143e13452 100644
@@ -732,32 +795,6 @@ index 2e5d1e238af9..bcaea5b0bdd6 100644
  	do {
  		old_pteval = pteval;
  		pteval ^= PTE_RDONLY;
-diff --git a/arch/arm64/mm/pgd.c b/arch/arm64/mm/pgd.c
-index 4a64089e5771..9621242c17bb 100644
---- a/arch/arm64/mm/pgd.c
-+++ b/arch/arm64/mm/pgd.c
-@@ -15,6 +15,9 @@
- #include <asm/page.h>
- #include <asm/tlbflush.h>
- 
-+#include <linux/secv/secv_idc.h>
-+#include <linux/secv/secv_flag.h>
-+
- static struct kmem_cache *pgd_cache __ro_after_init;
- 
- pgd_t *pgd_alloc(struct mm_struct *mm)
-@@ -29,6 +32,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
- 
- void pgd_free(struct mm_struct *mm, pgd_t *pgd)
- {
-+	if(!secv_flag_test(SCALL_PGD_FREE)){
-+		IDC(SCALL_PGD_FREE, (u64)(uintptr_t)mm, (u64)(uintptr_t)pgd, 0, 0);
-+		return;
-+	}
-+
- 	if (PGD_SIZE == PAGE_SIZE)
- 		free_page((unsigned long)pgd);
- 	else
 diff --git a/arch/arm64/secv/Makefile b/arch/arm64/secv/Makefile
 new file mode 100644
 index 000000000000..5f1af06aa680
@@ -768,7 +805,7 @@ index 000000000000..5f1af06aa680
 \ No newline at end of file
 diff --git a/arch/arm64/secv/secv_init.c b/arch/arm64/secv/secv_init.c
 new file mode 100644
-index 000000000000..a39e501e0702
+index 000000000000..b9b54268e39f
 --- /dev/null
 +++ b/arch/arm64/secv/secv_init.c
 @@ -0,0 +1,405 @@
@@ -1178,6 +1215,65 @@ index 000000000000..a39e501e0702
 +	}
 +}
 \ No newline at end of file
+diff --git a/drivers/security/secv/exit_lsm.c b/drivers/security/secv/exit_lsm.c
+new file mode 100644
+index 000000000000..d0f8a8b7fbc6
+--- /dev/null
++++ b/drivers/security/secv/exit_lsm.c
+@@ -0,0 +1,52 @@
++/**
++ * SECV Process Exit hook.
++ * This should free the pid mapping in the SSMe.
++ * For security, this should be run in the inner kernel.
++ */
++#include <linux/lsm.h>
++#include <linux/security.h>
++#include <linux/sched.h>
++#include <linux/binfmts.h>
++
++
++#define MODULE_NAME "SECV_exit_lsm"
++
++static void secv_task_exit(struct task_struct* task) 
++{
++    if(!(task->flags & PF_KTHREAD)) {
++        pr_info("%s: Process '%s' (PID: %d, TGID: %d) exiting with code: %d\n",
++        MODULE_NAME,
++        task->comm,
++        task->pid,
++        task->tgid,
++        task->exit_code >> 8);  /* Extract actual exit code */
++    }
++}
++
++static void secv_task_free(struct task_struct* task)
++{
++     pr_debug("%s: Task structure for '%s' (PID: %d) being freed\n",
++             MODULE_NAME, task->comm, task->pid);
++}
++
++/* Define the LSM hooks */
++static struct security_hook_list secv_hooks[] __lsm_ro_after_init = {
++    LSM_HOOK_INIT(task_exit, secv_task_exit),
++    LSM_HOOK_INIT(task_free, secv_task_free),
++};
++
++static int __init secv_task_exit_module_init(void)
++{
++    pr_info("%s: Initializing LSM module\n", MODULE_NAME);
++    
++    /* Register the security hooks */
++    security_add_hooks(secv_hooks, ARRAY_SIZE(secv_hooks), MODULE_NAME);
++    
++    return 0;
++}
++
++/* Required LSM structure */
++DEFINE_LSM(secv_exit_module) = {
++    .name = MODULE_NAME,
++    .init = secv_task_exit_module_init,
++};
+\ No newline at end of file
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
 index fb2c8d14327a..63981586a125 100644
 --- a/fs/binfmt_elf.c
@@ -1267,6 +1363,251 @@ index 77f01ac385f7..4a2b1a33ea0e 100644
  };
  
  static inline struct pid *task_pid(struct task_struct *task)
+diff --git a/include/linux/secv/secv_flag.h b/include/linux/secv/secv_flag.h
+new file mode 100644
+index 000000000000..bd6124ec5aaa
+--- /dev/null
++++ b/include/linux/secv/secv_flag.h
+@@ -0,0 +1,58 @@
++#ifndef __SECV_FLAG_H
++#define __SECV_FLAG_H
++
++#include <linux/percpu.h>
++#include <linux/preempt.h>
++#include <linux/types.h>
++
++#define SECV_SCALL_BASE  0xCA0ULL
++#define SECV_SCALL_LAST  0xCB3ULL
++
++#define SCALL_ANY   (SECV_SCALL_LAST + 1)
++#define SECV_FLAG_ANY_BIT   63
++
++DECLARE_PER_CPU(u64, __secv_idc_flags_mask);
++
++static __always_inline int __secv_flag_idx(u64 cmd)
++{
++	if (cmd == SCALL_ANY)
++		return SECV_FLAG_ANY_BIT;
++	if (cmd < SECV_SCALL_BASE || cmd > SECV_SCALL_LAST)
++		return -1;
++	return (int)(cmd - SECV_SCALL_BASE);
++}
++
++static __always_inline bool secv_flag_test(u64 cmd)
++{
++	int idx = __secv_flag_idx(cmd);
++	u64 m;
++	if (idx < 0) return false;
++	preempt_disable();
++	m = this_cpu_read(__secv_idc_flags_mask);
++	preempt_enable();
++	return (m >> idx) & 1ULL;
++}
++
++static __always_inline void secv_flag_set(u64 cmd)
++{
++	int idx = __secv_flag_idx(cmd);
++	u64 m;
++	if (idx < 0) return;
++	preempt_disable();
++	m = this_cpu_read(__secv_idc_flags_mask);
++	this_cpu_write(__secv_idc_flags_mask, m | (1ULL << idx));
++	preempt_enable();
++}
++
++static __always_inline void secv_flag_clear(u64 cmd)
++{
++	int idx = __secv_flag_idx(cmd);
++	u64 m;
++	if (idx < 0) return;
++	preempt_disable();
++	m = this_cpu_read(__secv_idc_flags_mask);
++	this_cpu_write(__secv_idc_flags_mask, m & ~(1ULL << idx));
++	preempt_enable();
++}
++
++#endif /* SECV_FLAG_H */
+\ No newline at end of file
+diff --git a/include/linux/secv/secv_hooks.h b/include/linux/secv/secv_hooks.h
+new file mode 100644
+index 000000000000..51aa6ea6fbc6
+--- /dev/null
++++ b/include/linux/secv/secv_hooks.h
+@@ -0,0 +1,26 @@
++/* 
++ * redirect existing functions to wrapper functions
++ */
++
++#ifndef __LINUX_SECV_HOOKS_H__
++#define __LINUX_SECV_HOOKS_H__
++
++#pragma once
++#if !defined(__VDSO__) && !defined(__ASSEMBLY__)
++
++#include <linux/atomic.h>
++#include <linux/percpu.h>
++#include <linux/uaccess.h>
++#include <asm/pgtable-types.h>
++#include <linux/mm_types.h>
++
++struct mm_struct;
++struct vm_area_struct;
++
++int secv_copy_mm(unsigned long clone_flags, struct task_struct *tsk);
++int secv_load_elf_binary(struct linux_binprm *bprm);
++asmlinkage void noinstr el1h_64_irq_handler(struct pt_regs *regs);
++extern void schedule_idle(void);
++
++#endif 
++#endif
+\ No newline at end of file
+diff --git a/include/linux/secv/secv_idc.h b/include/linux/secv/secv_idc.h
+new file mode 100644
+index 000000000000..75f9150385ff
+--- /dev/null
++++ b/include/linux/secv/secv_idc.h
+@@ -0,0 +1,109 @@
++#ifndef _SECV_IDC_H_
++#define _SECV_IDC_H_
++
++#if !defined(__ASSEMBLY__) && !defined(__VDSO__)
++
++#include <linux/percpu.h>
++#include <linux/bitops.h>
++#include <linux/preempt.h>
++#include <linux/irqflags.h>
++#include <linux/types.h>
++#include <linux/compiler_types.h>
++
++#include <linux/init.h>
++#include <linux/gfp.h>
++#include <linux/hashtable.h>
++
++#define SCALL_SET_PTE    0xCA0ULL
++#define SCALL_SET_PMD    0xCA1ULL
++#define SCALL_SET_PUD    0xCA2ULL
++#define SCALL_PTEP_GET_CLEAR 0xCA3ULL
++#define SCALL_PTEP_SET_WRPROTECT 0xCA4ULL
++#define SCALL_PMDP_ESTABLISH 0xCA5ULL
++#define SCALL_CPU_DO_SWITCH_MM    0xCA6ULL
++#define SCALL_PTEP_SET_ACCESS_FLAG    0xCA7ULL
++#define SCALL_PGD_FREE    0xCA8ULL 
++#define SCALL_LOAD_ELF_BINARY    0xCA9ULL 
++
++#define SCALL_LSM_BPRM 0xCC0ULL
++#define SCALL_LSM_OPEN 0xCC1ULL
++#define SCALL_LSM_MMAP 0xCC2ULL
++#define SCALL_LSM_TASK_ALLOC 0xCC3ULL
++#define SCALL_LSM_MPROTECT 0xCC4ULL
++#define SCALL_LSM_PERMISSION 0xCC5ULL
++
++extern u64 IDC(u64 cmd, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
++
++/*
++ * Shadow Mapping
++ */
++extern unsigned long shadow_offset_base;
++#define SECV_SHADOW_OFFSET shadow_offset_base
++
++extern int secv_enabled;
++extern int secv_pgtbl_enabled;
++
++#define __phys_to_shadow(x) ((unsigned long)(x) + SECV_SHADOW_OFFSET) 
++#define __virt_to_shadow(x) ((unsigned long)(x) - PAGE_OFFSET + SECV_SHADOW_OFFSET) 
++
++#define __shadow_to_virt(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET + PAGE_OFFSET)
++#define __shadow_to_phys(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET)
++
++#define __inner    __attribute__((__section__(".text.inner")))
++#define __secv_tsk __attribute__((__section__(".text.task")))
++
++extern unsigned long ptp_start_pfn;
++extern unsigned long ptp_end_pfn;
++#define ZONE_PTP_PFN 0x40000 
++
++extern char __inner_text_start[], __inner_text_end[];
++extern char __task_text_start[], __task_text_end[];
++/*
++ * INNER KERNEL STACK
++ */
++#define SECV_INNER_STKSZ PAGE_SIZE
++#define SECV_INNER_STK_PGSZ (SECV_INNER_STKSZ / PAGE_SIZE)
++
++struct inner_stack {
++	unsigned char stack[SECV_INNER_STKSZ];
++} __attribute__((aligned(PAGE_SIZE)));
++
++DECLARE_PER_CPU_PAGE_ALIGNED(struct inner_stack, inner_stacks);
++
++
++struct iret_stack {
++	unsigned long stack_bottom;
++	unsigned long stack_bottom_shdw;
++	unsigned long stack[5];
++} __attribute__((aligned(PAGE_SIZE)));
++
++DECLARE_PER_CPU_PAGE_ALIGNED(struct iret_stack, iret_stacks);
++
++DECLARE_PER_CPU(unsigned long, secv_temp);
++
++/* INIT PAGE TABLES */
++#define SECV_INIT_PGTBL_COUNT 4096
++
++enum secv_pgtbl_level {
++	SECV_PTP_NONE,
++	SECV_PTP_PGD,
++	SECV_PTP_P4D,
++	SECV_PTP_PUD,
++	SECV_PTP_PMD,
++	SECV_PTP_UPTE,
++	SECV_PTP_KPTE,
++	SECV_PTP_NUM
++};
++
++
++int __init secv_init(void);
++int secv_finalize(void);
++
++void secv_early_alloc_pgt_buf(void);
++void *secv_alloc_low_pages(unsigned int);
++
++unsigned long
++__secv_entry(unsigned long, unsigned long, unsigned long, unsigned long);
++
++#endif 
++#endif 
+diff --git a/include/linux/secv/secv_lsm.h b/include/linux/secv/secv_lsm.h
+new file mode 100644
+index 000000000000..51aeddcd4324
+--- /dev/null
++++ b/include/linux/secv/secv_lsm.h
+@@ -0,0 +1,25 @@
++/* security/secv_lsm.h */
++#ifndef _SECV_LSM_H_
++#define _SECV_LSM_H_
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/types.h>
++#include <linux/binfmts.h>
++#include <linux/cred.h>
++#include <linux/sched.h>
++#include <linux/fs.h>
++#include <linux/mm.h>
++#include <linux/percpu.h>
++#include <linux/security.h>
++#include <linux/lsm_hooks.h>
++#include <linux/printk.h>
++#include <linux/compiler.h>    
++
++#include <linux/secv/secv_idc.h> 
++
++u64 IDC(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
++
++u64 secv_call_idc(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
++
++#endif
+\ No newline at end of file
 diff --git a/init/main.c b/init/main.c
 index c787e94cc898..b823c7ad7f53 100644
 --- a/init/main.c
@@ -1307,9 +1648,628 @@ index 18121f8f85cd..390e66ec040b 100644
  obj-$(CONFIG_INTEGRITY)			+= integrity/
 +obj-$(CONFIG_SECURITY_SECV) += secv_lsm.o
 \ No newline at end of file
+diff --git a/security/integrity/ima/ima_main.c b/security/integrity/ima/ima_main.c
+index cc1217ac2c6f..4928be705843 100644
+--- a/security/integrity/ima/ima_main.c
++++ b/security/integrity/ima/ima_main.c
+@@ -26,9 +26,21 @@
+ #include <linux/ima.h>
+ #include <linux/fs.h>
+ #include <linux/iversion.h>
+-
++#include <linux/evm.h>
+ #include "ima.h"
+ 
++#include <linux/mm.h> 
++#include <linux/types.h>   
++#include <linux/ktime.h>
++#include <linux/sched.h>
++#include <linux/sched/task.h>   
++#include <linux/init.h>
++#include <linux/arm-smccc.h>
++#include <asm/cacheflush.h>
++#include <linux/optee_secv_smc.h> 
++
++#define SECV_MID_MAX   1024
++
+ #ifdef CONFIG_IMA_APPRAISE
+ int ima_appraise = IMA_APPRAISE_ENFORCE;
+ #else
+@@ -42,6 +54,7 @@ static struct notifier_block ima_lsm_policy_notifier = {
+ 	.notifier_call = ima_lsm_policy_change,
+ };
+ 
++
+ static int __init hash_setup(char *str)
+ {
+ 	struct ima_template_desc *template_desc = ima_template_desc_current();
+@@ -81,6 +94,7 @@ enum hash_algo ima_get_current_hash_algo(void)
+ 	return ima_hash_algo;
+ }
+ 
++
+ /* Prevent mmap'ing a file execute that is already mmap'ed write */
+ static int mmap_violation_check(enum ima_hooks func, struct file *file,
+ 				char **pathbuf, const char **pathname,
+@@ -114,7 +128,7 @@ static int mmap_violation_check(enum ima_hooks func, struct file *file,
+  *
+  */
+ static void ima_rdwr_violation_check(struct file *file,
+-				     struct integrity_iint_cache *iint,
++				     struct ima_iint_cache *iint,
+ 				     int must_measure,
+ 				     char **pathbuf,
+ 				     const char **pathname,
+@@ -127,7 +141,7 @@ static void ima_rdwr_violation_check(struct file *file,
+ 	if (mode & FMODE_WRITE) {
+ 		if (atomic_read(&inode->i_readcount) && IS_IMA(inode)) {
+ 			if (!iint)
+-				iint = integrity_iint_find(inode);
++				iint = ima_iint_find(inode);
+ 			/* IMA_MEASURE is set from reader side */
+ 			if (iint && test_bit(IMA_MUST_MEASURE,
+ 						&iint->atomic_flags))
+@@ -153,7 +167,7 @@ static void ima_rdwr_violation_check(struct file *file,
+ 				  "invalid_pcr", "open_writers");
+ }
+ 
+-static void ima_check_last_writer(struct integrity_iint_cache *iint,
++static void ima_check_last_writer(struct ima_iint_cache *iint,
+ 				  struct inode *inode, struct file *file)
+ {
+ 	fmode_t mode = file->f_mode;
+@@ -173,7 +187,7 @@ static void ima_check_last_writer(struct integrity_iint_cache *iint,
+ 				      STATX_CHANGE_COOKIE,
+ 				      AT_STATX_SYNC_AS_STAT) ||
+ 		    !(stat.result_mask & STATX_CHANGE_COOKIE) ||
+-		    stat.change_cookie != iint->version) {
++		    stat.change_cookie != iint->real_inode.version) {
+ 			iint->flags &= ~(IMA_DONE_MASK | IMA_NEW_FILE);
+ 			iint->measured_pcrs = 0;
+ 			if (update)
+@@ -189,28 +203,30 @@ static void ima_check_last_writer(struct integrity_iint_cache *iint,
+  *
+  * Flag files that changed, based on i_version
+  */
+-void ima_file_free(struct file *file)
++static void ima_file_free(struct file *file)
+ {
+ 	struct inode *inode = file_inode(file);
+-	struct integrity_iint_cache *iint;
++	struct ima_iint_cache *iint;
+ 
+ 	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+ 		return;
+ 
+-	iint = integrity_iint_find(inode);
++	iint = ima_iint_find(inode);
+ 	if (!iint)
+ 		return;
+ 
+ 	ima_check_last_writer(iint, inode, file);
+ }
+ 
++
+ static int process_measurement(struct file *file, const struct cred *cred,
+ 			       u32 secid, char *buf, loff_t size, int mask,
+ 			       enum ima_hooks func)
+ {
+-	struct inode *backing_inode, *inode = file_inode(file);
+-	struct integrity_iint_cache *iint = NULL;
++	struct inode *real_inode, *inode = file_inode(file);
++	struct ima_iint_cache *iint = NULL;
+ 	struct ima_template_desc *template_desc = NULL;
++	struct inode *metadata_inode;
+ 	char *pathbuf = NULL;
+ 	char filename[NAME_MAX];
+ 	const char *pathname = NULL;
+@@ -248,7 +264,7 @@ static int process_measurement(struct file *file, const struct cred *cred,
+ 	inode_lock(inode);
+ 
+ 	if (action) {
+-		iint = integrity_inode_get(inode);
++		iint = ima_inode_get(inode);
+ 		if (!iint)
+ 			rc = -ENOMEM;
+ 	}
+@@ -285,17 +301,28 @@ static int process_measurement(struct file *file, const struct cred *cred,
+ 		iint->measured_pcrs = 0;
+ 	}
+ 
+-	/* Detect and re-evaluate changes made to the backing file. */
+-	backing_inode = d_real_inode(file_dentry(file));
+-	if (backing_inode != inode &&
++	/*
++	 * On stacked filesystems, detect and re-evaluate file data and
++	 * metadata changes.
++	 */
++	real_inode = d_real_inode(file_dentry(file));
++	if (real_inode != inode &&
+ 	    (action & IMA_DO_MASK) && (iint->flags & IMA_DONE_MASK)) {
+-		if (!IS_I_VERSION(backing_inode) ||
+-		    backing_inode->i_sb->s_dev != iint->real_dev ||
+-		    backing_inode->i_ino != iint->real_ino ||
+-		    !inode_eq_iversion(backing_inode, iint->version)) {
++		if (!IS_I_VERSION(real_inode) ||
++		    integrity_inode_attrs_changed(&iint->real_inode,
++						  real_inode)) {
+ 			iint->flags &= ~IMA_DONE_MASK;
+ 			iint->measured_pcrs = 0;
+ 		}
++
++		/*
++		 * Reset the EVM status when metadata changed.
++		 */
++		metadata_inode = d_inode(d_real(file_dentry(file),
++					 D_REAL_METADATA));
++		if (evm_metadata_changed(inode, metadata_inode))
++			iint->flags &= ~(IMA_APPRAISED |
++					 IMA_APPRAISED_SUBMASK);
+ 	}
+ 
+ 	/* Determine if already appraised/measured based on bitmask
+@@ -368,7 +395,6 @@ static int process_measurement(struct file *file, const struct cred *cred,
+ 				      xattr_value, xattr_len, modsig, pcr,
+ 				      template_desc);
+ 	if (rc == 0 && (action & IMA_APPRAISE_SUBMASK)) {
+-		rc = ima_check_blacklist(iint, modsig, pcr);
+ 		if (rc != -EPERM) {
+ 			inode_lock(inode);
+ 			rc = ima_appraise_measurement(func, iint, file,
+@@ -376,10 +402,124 @@ static int process_measurement(struct file *file, const struct cred *cred,
+ 						      xattr_len, modsig);
+ 			inode_unlock(inode);
+ 		}
+-		if (!rc)
++		if (!rc){
+ 			rc = mmap_violation_check(func, file, &pathbuf,
+-						  &pathname, filename);
++						  &pathname, filename);}
++			
++			if (func == BPRM_CHECK) {
++				if (system_state != SYSTEM_RUNNING || current->pid == 1) {
++					goto skip_tee;
++				}
++
++    			/* Check for appended MID list size */
++				loff_t fsize = i_size_read(inode);
++    			if (fsize < sizeof(__le32)) {
++        			goto skip_tee;
++    			}
++    			
++				file->f_pos = 0;
++    			uint32_t mid_size = 0;
++    			loff_t offset = fsize - sizeof(uint32_t);
++				pr_info("[IMA debug] Reading MID size from offset: %lld, file size: %lld\n", offset, fsize);
++				ssize_t r = kernel_read(file, &mid_size, sizeof(uint32_t), &offset);
++				mid_size = le32_to_cpu(mid_size);
++
++    			if (r != sizeof(uint32_t)) {
++        			pr_info("[IMA debug] Failed to read MID size\n");
++        			goto skip_tee;
++    			}
++
++				if (mid_size == 0 || mid_size > SECV_MID_MAX || (12 + mid_size) > fsize){
++					pr_info("[IMA debug] No MID detected\n");
++    				goto skip_tee;
++				}
++
++    			char *mid_data = kmalloc(mid_size, GFP_KERNEL);
++    			if (!mid_data) {
++        			pr_info("[IMA debug] Failed to alloc mid_data\n");
++        			goto skip_tee;
++    			}
++
++    			offset = fsize - sizeof(uint32_t) - mid_size;
++				r = kernel_read(file, mid_data, mid_size, &offset);
++    			if (r != mid_size) {
++        			pr_info("[IMA debug] Failed to read MID data\n");
++        			kfree(mid_data);
++        			goto skip_tee;
++    			}
++
++				if(mid_size == 0){
++					pr_info("[IMA debug] No MID detected\n");
++					kfree(mid_data);
++        			goto skip_tee;
++				}
++
++				if (!iint->ima_hash || !(iint->flags & IMA_COLLECTED)) {
++    				pr_info("[IMA] hash not collected yet; skip TEE\n");
++    				kfree(mid_data);
++    				goto skip_tee;
++				}
++
++				int algo = iint->ima_hash->algo;
++    			size_t dlen = hash_digest_size[algo];
++    			u8 digest[IMA_MAX_DIGEST_SIZE];
++
++    			if (dlen != 32) {
++        			pr_info("[IMA] Digest size=%zu for algo=%d (expected 32)\n", dlen, algo);
++        			kfree(mid_data);
++        			goto skip_tee;
++    			}
++
++    			memcpy(digest, iint->ima_hash->digest, dlen);
++
++   			 	pr_info("[IMA] prepare sw msg struct\n");
++
++				/* Prepare Secure World message */
++    			struct __packed exec_info_msg {
++        			uint32_t pid;
++        			uint8_t file_hash[32];   /* hash digest of the file */
++        			uint32_t num_ids;        /* MID size (e.g., can message id, port id, etc/) */
++        			uint32_t mids[];    /* actual encrypted MIDs */
++    			};
++				
++				uint32_t num_ids = mid_size / sizeof(uint32_t);
++				size_t total = sizeof(struct exec_info_msg) + num_ids * sizeof(uint32_t);
++
++				struct exec_info_msg *buf = kmalloc(total, GFP_KERNEL);
++				if (!buf) goto skip_tee;
++
++				buf->pid = current->pid;
++				memcpy(buf->file_hash, digest, 32);
++				buf->num_ids = num_ids;
++				memcpy(buf->mids, mid_data, num_ids * sizeof(uint32_t));
++
++				dcache_clean_poc((unsigned long)buf, (unsigned long)buf + total);
++
++				phys_addr_t pa = virt_to_phys(buf);
++				uint32_t pa_lo = (uint32_t)(pa & 0xffffffffu);
++				uint32_t pa_hi = (uint32_t)(pa >> 32);
++
++				struct arm_smccc_res res;
++
++    			arm_smccc_smc((unsigned long)OPTEE_SMC_CALL_MID_TABLE, /* a0: SMC32 fid */
++				(unsigned long)pa_lo,                    /* a1: PA low */
++				(unsigned long)pa_hi,                    /* a2: PA high */
++				(unsigned long)((uint32_t)total),             /* a3: len */
++				0,0,0,0, &res);
++
++    			if (res.a0 != OPTEE_SMC_RETURN_OK)
++					pr_err("[IMA fastcall] OP-TEE ret=0x%llx\n", res.a0);
++
++    			memzero_explicit(buf, total);
++				kfree(buf);
++
++				skip_tee:
++				;
++			} 
++		rc = ima_check_blacklist(iint, modsig, pcr);
+ 	}
++
++	
+ 	if (action & IMA_AUDIT)
+ 		ima_audit_measurement(iint, pathname);
+ 
+@@ -427,8 +567,8 @@ static int process_measurement(struct file *file, const struct cred *cred,
+  * On success return 0.  On integrity appraisal error, assuming the file
+  * is in policy and IMA-appraisal is in enforcing mode, return -EACCES.
+  */
+-int ima_file_mmap(struct file *file, unsigned long reqprot,
+-		  unsigned long prot, unsigned long flags)
++static int ima_file_mmap(struct file *file, unsigned long reqprot,
++			 unsigned long prot, unsigned long flags)
+ {
+ 	u32 secid;
+ 	int ret;
+@@ -452,10 +592,12 @@ int ima_file_mmap(struct file *file, unsigned long reqprot,
+ 	return 0;
+ }
+ 
++
+ /**
+  * ima_file_mprotect - based on policy, limit mprotect change
+  * @vma: vm_area_struct protection is set to
+- * @prot: contains the protection that will be applied by the kernel.
++ * @reqprot: protection requested by the application
++ * @prot: protection that will be applied by the kernel
+  *
+  * Files can be mmap'ed read/write and later changed to execute to circumvent
+  * IMA's mmap appraisal policy rules.  Due to locking issues (mmap semaphore
+@@ -465,7 +607,8 @@ int ima_file_mmap(struct file *file, unsigned long reqprot,
+  *
+  * On mprotect change success, return 0.  On failure, return -EACESS.
+  */
+-int ima_file_mprotect(struct vm_area_struct *vma, unsigned long prot)
++static int ima_file_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
++			     unsigned long prot)
+ {
+ 	struct ima_template_desc *template = NULL;
+ 	struct file *file;
+@@ -523,7 +666,7 @@ int ima_file_mprotect(struct vm_area_struct *vma, unsigned long prot)
+  * On success return 0.  On integrity appraisal error, assuming the file
+  * is in policy and IMA-appraisal is in enforcing mode, return -EACCES.
+  */
+-int ima_bprm_check(struct linux_binprm *bprm)
++static int ima_bprm_check(struct linux_binprm *bprm)
+ {
+ 	int ret;
+ 	u32 secid;
+@@ -549,7 +692,7 @@ int ima_bprm_check(struct linux_binprm *bprm)
+  * On success return 0.  On integrity appraisal error, assuming the file
+  * is in policy and IMA-appraisal is in enforcing mode, return -EACCES.
+  */
+-int ima_file_check(struct file *file, int mask)
++static int ima_file_check(struct file *file, int mask)
+ {
+ 	u32 secid;
+ 
+@@ -558,16 +701,15 @@ int ima_file_check(struct file *file, int mask)
+ 				   mask & (MAY_READ | MAY_WRITE | MAY_EXEC |
+ 					   MAY_APPEND), FILE_CHECK);
+ }
+-EXPORT_SYMBOL_GPL(ima_file_check);
+ 
+ static int __ima_inode_hash(struct inode *inode, struct file *file, char *buf,
+ 			    size_t buf_size)
+ {
+-	struct integrity_iint_cache *iint = NULL, tmp_iint;
++	struct ima_iint_cache *iint = NULL, tmp_iint;
+ 	int rc, hash_algo;
+ 
+ 	if (ima_policy_flag) {
+-		iint = integrity_iint_find(inode);
++		iint = ima_iint_find(inode);
+ 		if (iint)
+ 			mutex_lock(&iint->mutex);
+ 	}
+@@ -577,7 +719,6 @@ static int __ima_inode_hash(struct inode *inode, struct file *file, char *buf,
+ 			mutex_unlock(&iint->mutex);
+ 
+ 		memset(&tmp_iint, 0, sizeof(tmp_iint));
+-		tmp_iint.inode = inode;
+ 		mutex_init(&tmp_iint.mutex);
+ 
+ 		rc = ima_collect_measurement(&tmp_iint, file, NULL, 0,
+@@ -683,10 +824,11 @@ EXPORT_SYMBOL_GPL(ima_inode_hash);
+  * Skip calling process_measurement(), but indicate which newly, created
+  * tmpfiles are in policy.
+  */
+-void ima_post_create_tmpfile(struct mnt_idmap *idmap,
+-			     struct inode *inode)
++static void ima_post_create_tmpfile(struct mnt_idmap *idmap,
++				    struct inode *inode)
++
+ {
+-	struct integrity_iint_cache *iint;
++	struct ima_iint_cache *iint;
+ 	int must_appraise;
+ 
+ 	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+@@ -698,7 +840,7 @@ void ima_post_create_tmpfile(struct mnt_idmap *idmap,
+ 		return;
+ 
+ 	/* Nothing to do if we can't allocate memory */
+-	iint = integrity_inode_get(inode);
++	iint = ima_inode_get(inode);
+ 	if (!iint)
+ 		return;
+ 
+@@ -715,10 +857,9 @@ void ima_post_create_tmpfile(struct mnt_idmap *idmap,
+  * Mark files created via the mknodat syscall as new, so that the
+  * file data can be written later.
+  */
+-void ima_post_path_mknod(struct mnt_idmap *idmap,
+-			 struct dentry *dentry)
++static void ima_post_path_mknod(struct mnt_idmap *idmap, struct dentry *dentry)
+ {
+-	struct integrity_iint_cache *iint;
++	struct ima_iint_cache *iint;
+ 	struct inode *inode = dentry->d_inode;
+ 	int must_appraise;
+ 
+@@ -731,7 +872,7 @@ void ima_post_path_mknod(struct mnt_idmap *idmap,
+ 		return;
+ 
+ 	/* Nothing to do if we can't allocate memory */
+-	iint = integrity_inode_get(inode);
++	iint = ima_inode_get(inode);
+ 	if (!iint)
+ 		return;
+ 
+@@ -751,8 +892,8 @@ void ima_post_path_mknod(struct mnt_idmap *idmap,
+  *
+  * For permission return 0, otherwise return -EACCES.
+  */
+-int ima_read_file(struct file *file, enum kernel_read_file_id read_id,
+-		  bool contents)
++static int ima_read_file(struct file *file, enum kernel_read_file_id read_id,
++			 bool contents)
+ {
+ 	enum ima_hooks func;
+ 	u32 secid;
+@@ -801,8 +942,8 @@ const int read_idmap[READING_MAX_ID] = {
+  * On success return 0.  On integrity appraisal error, assuming the file
+  * is in policy and IMA-appraisal is in enforcing mode, return -EACCES.
+  */
+-int ima_post_read_file(struct file *file, void *buf, loff_t size,
+-		       enum kernel_read_file_id read_id)
++static int ima_post_read_file(struct file *file, char *buf, loff_t size,
++			      enum kernel_read_file_id read_id)
+ {
+ 	enum ima_hooks func;
+ 	u32 secid;
+@@ -835,7 +976,7 @@ int ima_post_read_file(struct file *file, void *buf, loff_t size,
+  *
+  * For permission return 0, otherwise return -EACCES.
+  */
+-int ima_load_data(enum kernel_load_data_id id, bool contents)
++static int ima_load_data(enum kernel_load_data_id id, bool contents)
+ {
+ 	bool ima_enforce, sig_enforce;
+ 
+@@ -889,9 +1030,9 @@ int ima_load_data(enum kernel_load_data_id id, bool contents)
+  * On success return 0.  On integrity appraisal error, assuming the file
+  * is in policy and IMA-appraisal is in enforcing mode, return -EACCES.
+  */
+-int ima_post_load_data(char *buf, loff_t size,
+-		       enum kernel_load_data_id load_id,
+-		       char *description)
++static int ima_post_load_data(char *buf, loff_t size,
++			      enum kernel_load_data_id load_id,
++			      char *description)
+ {
+ 	if (load_id == LOADING_FIRMWARE) {
+ 		if ((ima_appraise & IMA_APPRAISE_FIRMWARE) &&
+@@ -902,6 +1043,13 @@ int ima_post_load_data(char *buf, loff_t size,
+ 		return 0;
+ 	}
+ 
++	/*
++	 * Measure the init_module syscall buffer containing the ELF image.
++	 */
++	if (load_id == LOADING_MODULE)
++		ima_measure_critical_data("modules", "init_module",
++					  buf, size, true, NULL, 0);
++
+ 	return 0;
+ }
+ 
+@@ -934,13 +1082,15 @@ int process_buffer_measurement(struct mnt_idmap *idmap,
+ 	int ret = 0;
+ 	const char *audit_cause = "ENOMEM";
+ 	struct ima_template_entry *entry = NULL;
+-	struct integrity_iint_cache iint = {};
++	struct ima_iint_cache iint = {};
+ 	struct ima_event_data event_data = {.iint = &iint,
+ 					    .filename = eventname,
+ 					    .buf = buf,
+ 					    .buf_len = size};
+ 	struct ima_template_desc *template;
+ 	struct ima_max_digest_data hash;
++	struct ima_digest_data *hash_hdr = container_of(&hash.hdr,
++						struct ima_digest_data, hdr);
+ 	char digest_hash[IMA_MAX_DIGEST_SIZE];
+ 	int digest_hash_len = hash_digest_size[ima_hash_algo];
+ 	int violation = 0;
+@@ -979,7 +1129,7 @@ int process_buffer_measurement(struct mnt_idmap *idmap,
+ 	if (!pcr)
+ 		pcr = CONFIG_IMA_MEASURE_PCR_IDX;
+ 
+-	iint.ima_hash = &hash.hdr;
++	iint.ima_hash = hash_hdr;
+ 	iint.ima_hash->algo = ima_hash_algo;
+ 	iint.ima_hash->length = hash_digest_size[ima_hash_algo];
+ 
+@@ -990,7 +1140,7 @@ int process_buffer_measurement(struct mnt_idmap *idmap,
+ 	}
+ 
+ 	if (buf_hash) {
+-		memcpy(digest_hash, hash.hdr.digest, digest_hash_len);
++		memcpy(digest_hash, hash_hdr->digest, digest_hash_len);
+ 
+ 		ret = ima_calc_buffer_hash(digest_hash, digest_hash_len,
+ 					   iint.ima_hash);
+@@ -1046,10 +1196,10 @@ void ima_kexec_cmdline(int kernel_fd, const void *buf, int size)
+ 		return;
+ 
+ 	f = fdget(kernel_fd);
+-	if (!f.file)
++	if (!fd_file(f))
+ 		return;
+ 
+-	process_buffer_measurement(file_mnt_idmap(f.file), file_inode(f.file),
++	process_buffer_measurement(file_mnt_idmap(fd_file(f)), file_inode(fd_file(f)),
+ 				   buf, size, "kexec-cmdline", KEXEC_CMDLINE, 0,
+ 				   NULL, false, NULL, 0);
+ 	fdput(f);
+@@ -1089,6 +1239,39 @@ int ima_measure_critical_data(const char *event_label,
+ }
+ EXPORT_SYMBOL_GPL(ima_measure_critical_data);
+ 
++#ifdef CONFIG_INTEGRITY_ASYMMETRIC_KEYS
++
++/**
++ * ima_kernel_module_request - Prevent crypto-pkcs1pad(rsa,*) requests
++ * @kmod_name: kernel module name
++ *
++ * Avoid a verification loop where verifying the signature of the modprobe
++ * binary requires executing modprobe itself. Since the modprobe iint->mutex
++ * is already held when the signature verification is performed, a deadlock
++ * occurs as soon as modprobe is executed within the critical region, since
++ * the same lock cannot be taken again.
++ *
++ * This happens when public_key_verify_signature(), in case of RSA algorithm,
++ * use alg_name to store internal information in order to construct an
++ * algorithm on the fly, but crypto_larval_lookup() will try to use alg_name
++ * in order to load a kernel module with same name.
++ *
++ * Since we don't have any real "crypto-pkcs1pad(rsa,*)" kernel modules,
++ * we are safe to fail such module request from crypto_larval_lookup(), and
++ * avoid the verification loop.
++ *
++ * Return: Zero if it is safe to load the kernel module, -EINVAL otherwise.
++ */
++static int ima_kernel_module_request(char *kmod_name)
++{
++	if (strncmp(kmod_name, "crypto-pkcs1pad(rsa,", 20) == 0)
++		return -EINVAL;
++
++	return 0;
++}
++
++#endif /* CONFIG_INTEGRITY_ASYMMETRIC_KEYS */
++
+ static int __init init_ima(void)
+ {
+ 	int error;
+@@ -1120,4 +1303,49 @@ static int __init init_ima(void)
+ 	return error;
+ }
+ 
+-late_initcall(init_ima);	/* Start IMA after the TPM is available */
++static struct security_hook_list ima_hooks[] __ro_after_init = {
++	LSM_HOOK_INIT(bprm_check_security, ima_bprm_check),
++	LSM_HOOK_INIT(file_post_open, ima_file_check),
++	LSM_HOOK_INIT(inode_post_create_tmpfile, ima_post_create_tmpfile),
++	LSM_HOOK_INIT(file_release, ima_file_free),
++	LSM_HOOK_INIT(mmap_file, ima_file_mmap),
++	LSM_HOOK_INIT(file_mprotect, ima_file_mprotect),
++	LSM_HOOK_INIT(kernel_load_data, ima_load_data),
++	LSM_HOOK_INIT(kernel_post_load_data, ima_post_load_data),
++	LSM_HOOK_INIT(kernel_read_file, ima_read_file),
++	LSM_HOOK_INIT(kernel_post_read_file, ima_post_read_file),
++	LSM_HOOK_INIT(path_post_mknod, ima_post_path_mknod),
++#ifdef CONFIG_IMA_MEASURE_ASYMMETRIC_KEYS
++	LSM_HOOK_INIT(key_post_create_or_update, ima_post_key_create_or_update),
++#endif
++#ifdef CONFIG_INTEGRITY_ASYMMETRIC_KEYS
++	LSM_HOOK_INIT(kernel_module_request, ima_kernel_module_request),
++#endif
++	LSM_HOOK_INIT(inode_free_security_rcu, ima_inode_free_rcu),
++};
++
++static const struct lsm_id ima_lsmid = {
++	.name = "ima",
++	.id = LSM_ID_IMA,
++};
++
++static int __init init_ima_lsm(void)
++{
++	ima_iintcache_init();
++	security_add_hooks(ima_hooks, ARRAY_SIZE(ima_hooks), &ima_lsmid);
++	init_ima_appraise_lsm(&ima_lsmid);
++	return 0;
++}
++
++struct lsm_blob_sizes ima_blob_sizes __ro_after_init = {
++	.lbs_inode = sizeof(struct ima_iint_cache *),
++};
++
++DEFINE_LSM(ima) = {
++	.name = "ima",
++	.init = init_ima_lsm,
++	.order = LSM_ORDER_LAST,
++	.blobs = &ima_blob_sizes,
++};
++
++late_initcall(init_ima);	/* Start IMA after the TPM is available */
+\ No newline at end of file
 diff --git a/security/secv_lsm.c b/security/secv_lsm.c
 new file mode 100644
-index 000000000000..f5d9b7048bcf
+index 000000000000..4f87d714561a
 --- /dev/null
 +++ b/security/secv_lsm.c
 @@ -0,0 +1,365 @@
@@ -1678,215 +2638,3 @@ index 000000000000..f5d9b7048bcf
 +	.name = "secv",
 +	.init = secv_lsm_init,
 +};
-diff --git a/include/linux/secv/secv_lsm.h b/include/linux/secv/secv_lsm.h
-new file mode 100644
-index 000000000000..fe9c603cea5b
---- /dev/null
-+++ b/include/linux/secv/secv_lsm.h
-@@ -0,0 +1,25 @@
-+/* security/secv_lsm.h */
-+#ifndef _SECV_LSM_H_
-+#define _SECV_LSM_H_
-+
-+#include <linux/module.h>
-+#include <linux/init.h>
-+#include <linux/types.h>
-+#include <linux/binfmts.h>
-+#include <linux/cred.h>
-+#include <linux/sched.h>
-+#include <linux/fs.h>
-+#include <linux/mm.h>
-+#include <linux/percpu.h>
-+#include <linux/security.h>
-+#include <linux/lsm_hooks.h>
-+#include <linux/printk.h>
-+#include <linux/compiler.h>    
-+
-+#include <linux/secv/secv_idc.h>
-+
-+u64 IDC(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
-+
-+u64 secv_call_idc(u64 cmd, u64 a0, u64 a1, u64 a2, u64 a3);
-+
-+#endif
-\ No newline at end of file
-diff --git a/include/linux/secv/secv_flag.h b/include/linux/secv/secv_flag.h
-new file mode 100644
-index 000000000000..bd6124ec5aaa
---- /dev/null
-+++ b/include/linux/secv/secv_flag.h
-@@ -0,0 +1,58 @@
-+#ifndef __SECV_FLAG_H
-+#define __SECV_FLAG_H
-+
-+#include <linux/percpu.h>
-+#include <linux/preempt.h>
-+#include <linux/types.h>
-+
-+#define SECV_SCALL_BASE  0xCA0ULL
-+#define SECV_SCALL_LAST  0xCB3ULL
-+
-+#define SCALL_ANY   (SECV_SCALL_LAST + 1)
-+#define SECV_FLAG_ANY_BIT   63
-+
-+DECLARE_PER_CPU(u64, __secv_idc_flags_mask);
-+
-+static __always_inline int __secv_flag_idx(u64 cmd)
-+{
-+	if (cmd == SCALL_ANY)
-+		return SECV_FLAG_ANY_BIT;
-+	if (cmd < SECV_SCALL_BASE || cmd > SECV_SCALL_LAST)
-+		return -1;
-+	return (int)(cmd - SECV_SCALL_BASE);
-+}
-+
-+static __always_inline bool secv_flag_test(u64 cmd)
-+{
-+	int idx = __secv_flag_idx(cmd);
-+	u64 m;
-+	if (idx < 0) return false;
-+	preempt_disable();
-+	m = this_cpu_read(__secv_idc_flags_mask);
-+	preempt_enable();
-+	return (m >> idx) & 1ULL;
-+}
-+
-+static __always_inline void secv_flag_set(u64 cmd)
-+{
-+	int idx = __secv_flag_idx(cmd);
-+	u64 m;
-+	if (idx < 0) return;
-+	preempt_disable();
-+	m = this_cpu_read(__secv_idc_flags_mask);
-+	this_cpu_write(__secv_idc_flags_mask, m | (1ULL << idx));
-+	preempt_enable();
-+}
-+
-+static __always_inline void secv_flag_clear(u64 cmd)
-+{
-+	int idx = __secv_flag_idx(cmd);
-+	u64 m;
-+	if (idx < 0) return;
-+	preempt_disable();
-+	m = this_cpu_read(__secv_idc_flags_mask);
-+	this_cpu_write(__secv_idc_flags_mask, m & ~(1ULL << idx));
-+	preempt_enable();
-+}
-+
-+#endif /* SECV_FLAG_H */
-\ No newline at end of file
-diff --git a/include/linux/secv/secv_idc.h b/include/linux/secv/secv_idc.h
-new file mode 100644
-index 000000000000..75f9150385ff
---- /dev/null
-+++ b/include/linux/secv/secv_idc.h
-@@ -0,0 +1,109 @@
-+#ifndef _SECV_IDC_H_
-+#define _SECV_IDC_H_
-+
-+#if !defined(__ASSEMBLY__) && !defined(__VDSO__)
-+
-+#include <linux/percpu.h>
-+#include <linux/bitops.h>
-+#include <linux/preempt.h>
-+#include <linux/irqflags.h>
-+#include <linux/types.h>
-+#include <linux/compiler_types.h>
-+
-+#include <linux/init.h>
-+#include <linux/gfp.h>
-+#include <linux/hashtable.h>
-+
-+#define SCALL_SET_PTE    0xCA0ULL
-+#define SCALL_SET_PMD    0xCA1ULL
-+#define SCALL_SET_PUD    0xCA2ULL
-+#define SCALL_PTEP_GET_CLEAR 0xCA3ULL
-+#define SCALL_PTEP_SET_WRPROTECT 0xCA4ULL
-+#define SCALL_PMDP_ESTABLISH 0xCA5ULL
-+#define SCALL_CPU_DO_SWITCH_MM    0xCA6ULL
-+#define SCALL_PTEP_SET_ACCESS_FLAG    0xCA7ULL
-+#define SCALL_PGD_FREE    0xCA8ULL 
-+#define SCALL_LOAD_ELF_BINARY    0xCA9ULL 
-+
-+#define SCALL_LSM_BPRM 0xCC0ULL
-+#define SCALL_LSM_OPEN 0xCC1ULL
-+#define SCALL_LSM_MMAP 0xCC2ULL
-+#define SCALL_LSM_TASK_ALLOC 0xCC3ULL
-+#define SCALL_LSM_MPROTECT 0xCC4ULL
-+#define SCALL_LSM_PERMISSION 0xCC5ULL
-+
-+extern u64 IDC(u64 cmd, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
-+
-+/*
-+ * Shadow Mapping
-+ */
-+extern unsigned long shadow_offset_base;
-+#define SECV_SHADOW_OFFSET shadow_offset_base
-+
-+extern int secv_enabled;
-+extern int secv_pgtbl_enabled;
-+
-+#define __phys_to_shadow(x) ((unsigned long)(x) + SECV_SHADOW_OFFSET) 
-+#define __virt_to_shadow(x) ((unsigned long)(x) - PAGE_OFFSET + SECV_SHADOW_OFFSET) 
-+
-+#define __shadow_to_virt(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET + PAGE_OFFSET)
-+#define __shadow_to_phys(x) ((unsigned long)(x) - SECV_SHADOW_OFFSET)
-+
-+#define __inner    __attribute__((__section__(".text.inner")))
-+#define __secv_tsk __attribute__((__section__(".text.task")))
-+
-+extern unsigned long ptp_start_pfn;
-+extern unsigned long ptp_end_pfn;
-+#define ZONE_PTP_PFN 0x40000 
-+
-+extern char __inner_text_start[], __inner_text_end[];
-+extern char __task_text_start[], __task_text_end[];
-+/*
-+ * INNER KERNEL STACK
-+ */
-+#define SECV_INNER_STKSZ PAGE_SIZE
-+#define SECV_INNER_STK_PGSZ (SECV_INNER_STKSZ / PAGE_SIZE)
-+
-+struct inner_stack {
-+	unsigned char stack[SECV_INNER_STKSZ];
-+} __attribute__((aligned(PAGE_SIZE)));
-+
-+DECLARE_PER_CPU_PAGE_ALIGNED(struct inner_stack, inner_stacks);
-+
-+
-+struct iret_stack {
-+	unsigned long stack_bottom;
-+	unsigned long stack_bottom_shdw;
-+	unsigned long stack[5];
-+} __attribute__((aligned(PAGE_SIZE)));
-+
-+DECLARE_PER_CPU_PAGE_ALIGNED(struct iret_stack, iret_stacks);
-+
-+DECLARE_PER_CPU(unsigned long, secv_temp);
-+
-+/* INIT PAGE TABLES */
-+#define SECV_INIT_PGTBL_COUNT 4096
-+
-+enum secv_pgtbl_level {
-+	SECV_PTP_NONE,
-+	SECV_PTP_PGD,
-+	SECV_PTP_P4D,
-+	SECV_PTP_PUD,
-+	SECV_PTP_PMD,
-+	SECV_PTP_UPTE,
-+	SECV_PTP_KPTE,
-+	SECV_PTP_NUM
-+};
-+
-+
-+int __init secv_init(void);
-+int secv_finalize(void);
-+
-+void secv_early_alloc_pgt_buf(void);
-+void *secv_alloc_low_pages(unsigned int);
-+
-+unsigned long
-+__secv_entry(unsigned long, unsigned long, unsigned long, unsigned long);
-+
-+#endif 
-+#endif 
