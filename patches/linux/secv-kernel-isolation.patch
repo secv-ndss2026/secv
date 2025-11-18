@@ -174,7 +174,7 @@ index 14be5000c5a0..7e40108d6614 100644
 +	struct task_struct* tsk = current;
 +	/* SECV [TODO]: Check if writing to message buffer from the inner kernel */
 +	if(tsk->can_buffer_rec != NULL && 
-+		((uintptr_t)to >= (uintptr_t)tsk->can_buffer_rec->buffer) && 
++		((uintptr_t)to >= (uintptr_t)tsk->can_buffer_rec) && 
 +		(uintptr_t)to < ((uintptr_t)to + PAGE_SIZE) && !secv_flag_test(SCALL_ANY)){
 +			return n; 
 +	}else
