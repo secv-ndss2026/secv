@@ -102,7 +102,9 @@ We include scripts to reproduce the LMBench experiments, the communication perfo
 
 #### Applying Patches and Building SECV:
 
-To apply the patches, one needs to move them into the corresponding yocto layer. For example, for Linux, move the patches to the `sources/meta-gvip/recipes-kernel/linux/patches` directory of your yocto environment. Then modify the file at `sources/meta-gvip/recipes-kernel/linux/linux-s32_%.bbappend` to include the patches as follows:
+To apply the patches, one needs to move them into the corresponding yocto layer. 
+
+For Linux, move the patches to the `sources/meta-gvip/recipes-kernel/linux/linux-s32/patches` directory of your yocto environment. Then modify the file at `sources/meta-gvip/recipes-kernel/linux/linux-s32_%.bbappend` to include the patches as follows:
 To the file, add:
 
 ```sh
@@ -112,6 +114,29 @@ SRC_URI:append = "\
     file://patches/secv-ima-auth.patch \
 "
 ```
+
+For OPTEE, first go to `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee` and follow the step described below.
+
+```sh
+mkdir -p optee-os/patches
+```
+Then move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee/optee-os/patches` directory. Then modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipes-security/optee/optee-os_%.bbappend`
+
+```sh
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+
+SRC_URI:append = "\
+    file://patches/secv-trusted-os.patch \
+"
+```
+
+For Arm Trusted Firmware, move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware` directory. Then same as previous step, modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware_%.bbappend` to include the patch as follows:
+
+```sh
+SRC_URI:append = "\
+    file://secv-secure-monitor.patch \
+```
+
 
 After that, one can rebuild the image again to enforce these changes by rerunning the build command:
 
