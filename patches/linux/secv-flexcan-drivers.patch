@@ -1091,21 +1091,6 @@ index d29bb4521947..f1ffbd92d7e5 100644
  int can_rx_offload_irq_offload_fifo(struct can_rx_offload *offload);
  int can_rx_offload_queue_timestamp(struct can_rx_offload *offload,
  				   struct sk_buff *skb, u32 timestamp);
-diff --git a/include/linux/sched.h b/include/linux/sched.h
-index c02fd12b49dc..919358b33d3c 100644
---- a/include/linux/sched.h
-+++ b/include/linux/sched.h
-@@ -1554,6 +1554,10 @@ struct task_struct {
- 	 *
- 	 * Do not put anything below here!
- 	 */
-+	/**
-+	 * SECV: can_buffer_rec, TODO: move this to some special page in the inner kernel
-+	 */
-+	void *can_buffer_rec;
- };
- 
- static inline struct pid *task_pid(struct task_struct *task)
 diff --git a/net/can/af_can.c b/net/can/af_can.c
 index 7343fd487dbe..9e5ca91d4050 100644
 --- a/net/can/af_can.c
