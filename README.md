@@ -2,7 +2,7 @@
 
 This is the open-source for the SECV: Securing Connected Vehicles with Hardware Trust Anchors, NDSS 2026 Fall paper.
 Here, we will provide code modifications for the core parts of the paper and the instructions on building SECV for S32G3.
-We provide code patches showing the major changes made to help reduce the time of search time. The major components here are the **Linux Kernel (NW OS)**, **OPTEE-OS (Trusted OS)**, **drivers (NW & SW components)**, and **Arm Trusted Firmware (The Security Monitor)**. This open-source is based on **Linux Kernel 6.6.52**, **OPTEE-OS V4.0**, and **Arm Trusted Firmware 2.10.7**. This implementation has been tested on NXP S32G3, but we are making an effort to provide a porting for **Raspberry Pi 4** with an SPI driver, and later the Ethernet driver with the F-Stack kernel bypass networking included. Except for secure peripheral handling in ATF and OPTEE where implementations are specific to S32G3, we believe the provided patches apply universally regardless of the board, except where mentioned specifically.
+We provide code patches showing the major changes made to help reduce the time of search time. The major components here are the **Linux Kernel (NW OS)**, **OPTEE-OS (Trusted OS)**, **drivers (NW & SW components)**, and **Arm Trusted Firmware (The Security Monitor)**. This open-source is based on **Linux Kernel 6.6.52**, **OPTEE-OS V4.0**, and **Arm Trusted Firmware 2.10.7**, we believe the provided patches apply universally regardless of the board, except where mentioned specifically.
 
 ## Caution and Disclaimer:
 
@@ -13,28 +13,24 @@ Additionally, especially for S32G3, some of the required firmware requires Licen
 
 ```bash
 .
-├── datasets
-│   ├── can2_g10.log
-│   ├── can2_g1.log
-│   ├── fd_g10.log
-│   ├── fd_g1.log
-│   └── replace_ids.py
 ├── GoldVIP-S32G3-1.13.0-User-Manual.pdf
 ├── LICENSE
 ├── patches
 │   ├── arm-trusted-firmware
+│   │   └── secv-secure-monitor.patch
 │   ├── linux
+│   │   ├── secv-flexcan-drivers.patch
+│   │   ├── secv-ima-auth.patch
+│   │   └── secv-kernel-isolation.patch
 │   └── optee-os
+│       └── secv-trusted-os.patch
 ├── README.md
 ├── s32g3
-│   ├── arm-trusted-firmware
-│   ├── linux-s32
-│   ├── local.conf
-│   └── optee_os
+│   └── local.conf
 └── scripts
+    ├── candump.sh
     ├── canperf.sh
     ├── latency.py
-    ├── rw_canperf.sh
     └── show_lmbench_result.sh
 ```
 
@@ -66,18 +62,6 @@ After running the above commands, one should now have a `build_s32g399ardb3` fol
 
 Run the following command to test-build. This should download most of the needed dependencies.
 
-Edit the `conf/local.conf` file to disable building features not needed to run SECV. Add the following:
-
-```conf
-DISTRO_FEATURES:remove = "goldvip-cloud"
-DISTRO_FEATURES:remove = "goldvip-containerization"
-#DISTRO_FEATURES:remove = "goldvip-crypto"
-DISTRO_FEATURES:remove = "goldvip-dds"
-DISTRO_FEATURES:remove = "goldvip-ml"
-DISTRO_FEATURES:remove = "goldvip-ota"
-DISTRO_FEATURES:remove = "goldvip-adaptive-autosar"
-```
-
 ```sh
 $ bitbake fsl-image-goldvip
 ```
@@ -106,19 +90,27 @@ https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-aarch64-shenandoah
 https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-jdk8u272-ga.tar.bz2
 ```
 
-After that, the default build should complete successfully. Suppose one gets any errors regarding failure to download required binaries for some reason (say the version is no longer available or the files were moved). In that case, one may simply download the failing files manually and save them in the downloads directory. This may require updating the expected hash in some cases. This can be accomplished by visiting bitbake layer attempting to download the file and updating the hash manually.
+After that, the default build should complete successfully.
 
 #### SECV Baseline Building:
 
-To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository. For this, move the `local.conf` file provided under the `s32g3` directory of this repository into the `build/conf/local.conf` directory of your build environment.
+To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository. For this move the `local.conf` file provided under the `s32g3` directory of this repository into the `build/conf/local.conf` directory of your build environment.
 After the image is built, one may find it at build/tmp/deploy/images/s32g3/....sdcard
-This is the baseline image against which we compare SECV in terms of performance, communication latency, and resource usage.
-In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board) via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board, such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
+This is the baseline image against which we compare SECV in terms of performance, communication latency and resource usage.
+In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board), via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
 We include scripts to reproduce the LMBench experiments, the communication performance, the system performance (LMBench), and the IVN gateway resource usage. The scripts are identifiable by their filenames.
 
-#### Applying Patches and Building SECV:
+#### Applying Patches on Docker Image:
 
-To apply the patches, one needs to move them into the corresponding yocto layer. For example, for Linux, move the patches to the `sources/meta-gvip/recipes-kernel/linux/linux-s32/patches` directory of your yocto environment. Then modify the file at `sources/meta-gvip/recipes-kernel/linux/linux-s32_%.bbappend` to include the patches as follows:
+Before apply the patches, one needs to switch the user to `secv` as follows:
+```sh
+$ cd nxp-yocto-goldvip
+$ source nxp-setup-alb.sh -D fsl-goldvip-no-hv -m s32g399ardb3 -e "meta-aws meta-java meta-vip"
+```
+
+After then, one needs to move patches into the corresponding yocto layer. 
+
+For Linux, move the patches to the `sources/meta-gvip/recipes-kernel/linux/linux-s32/patches` directory of your yocto environment. Then modify the file at `sources/meta-gvip/recipes-kernel/linux/linux-s32_%.bbappend` to include the patches as follows:
 To the file, add:
 
 ```sh
@@ -129,7 +121,30 @@ SRC_URI:append = "\
 "
 ```
 
-Do the same for arm-trusted-firmware and optee_os, and after that, one can rebuild the image again to enforce these changes by rerunning the build command:
+For OPTEE, first go to `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee` and follow the step described below.
+
+```sh
+mkdir -p optee-os/patches
+```
+Then move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee/optee-os/patches` directory. Then modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipes-security/optee/optee-os_%.bbappend`
+
+```sh
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+
+SRC_URI:append = "\
+    file://patches/secv-trusted-os.patch \
+"
+```
+
+For Arm Trusted Firmware, move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware` directory. Then same as previous step, modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware_%.bbappend` to include the patch as follows:
+
+```sh
+SRC_URI:append = "\
+    file://secv-secure-monitor.patch \
+```
+
+
+After that, one can rebuild the image again to enforce these changes by rerunning the build command:
 
 ```sh
 bitbake fsl-image-goldvip
@@ -142,48 +157,35 @@ bitbake fsl-image-goldvip
 Run:
 
 ```sh
-$lmbench-run
+$./lembench-run
 ```
 
-Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.** Where the `vi` screen opens, simply close it by pressing `:q<ENTER>`.
-
-> **Note - configuriaton is reused:** After the first run, LMBench saves previous selections to `/usr/share/lmbench/scripts/CONFIG.s32g399ardb3` and reuses that file on subsequent runs, so you will not be prompted again.
-> If you wish to reconfigure LMBench, simply remove the saved configuration file or rerun `lmbench-run`
-
-After 20~50 minutes, the result is stored at `/usr/share/lmbench/results/`. To enhance readability, we provide a script that presents the results in a well-organized manner.
+Then a prompt will appear asking for configuration input. For our experiment, use the default settings by **pressing Enter.**
+After 20~50 minutes, the result is stored at /usr/share/lmbench/results/. To enhance readability, we provide a script that presents the results in a well-organized manner.
 
 ```sh
-$cd /usr/share/lmbench/results
-$/home/root/scripts/show_lmbench_results.sh <result_file.0>
+$cd /usr/share/lmbench/resesults
+$./show_lmbench_results.sh <result_file.0>
 ```
 
-#### Communication Performance (Microbenchmarks)
+#### Real-World Workload
 
 Run:
 
 ```sh
-$./scripts/canperf.sh -t can0 -r can1 -i 0 -o 4 -g 0 -s 8 -l 10
+$./canperf.sh -t can0 -r can1 --payload can_fd_message.log
+$./canperf.sh -t can0 -r can1 --payload can_msg_day2.log
+$./canperf.sh -t can0 -r can1 --payload can2_g1.log
+
 ```
-
-This command transmits CAN messages of ID 0 over CAN interface `can0` to the IVN gateway. The gateway acknowledges the messages and responds with CAN messages of ID 4. After it runs, it prints the results, including the throughput and the IVN gateway percentage load (`M7_0 core load`).
-It also saves the timestamp differences of successive received messages in a file, `/tmp/candump.log`, which we use to compute the total latency. To measure the average latency, run the following command:
-
-```sh
-$python3 scripts/latency.py /tmp/candump.log
-```
-
-To reproduce the results in the SECV paper, you may repeat the experiment with (-g 1) to change the transmission gap to 1ms instead of 0ms, and (-s 16/32/64) for message sizes 16, 32, and 16.
-
-#### Communication Performance (Real-World Workload)
-
-For real-world workloads, we check only whether all CAN messages are transmitted without missing deadlines. For this, we replay the CAN messages recorded from real-world vehicles. The dataset is large (hundreds of MBs), so we take the first 10000 messages to simplify the experiment.
-Run:
-
-```sh
-$./scripts/rw_canperf.sh -t can0 -r can1 -o 4 ./datasets/<any_log_file.log>
-```
-
-Since we transmit 10000 for each log file, you should confirm that 10000 messages are transmitted (by checking the printed Tx frames) after the experiment runs. As the messages don't conform to our IVN GW expected messages, we don't receive responses for this particular experiment. Nonetheless, we manage to confirm that SECV meets all the deadlines of realworld transmissions.
-Recall that if the controller is busy due to transmission, messages on the queue are stalled, and this would cause delay in transmission, hence some frames would fail to meet the deadlines.
 
 This experiment employs the publicly available CAN message dataset released by [HCRL](https://ocslab.hksecurity.net/Datasets). Used dataset are already provisioned on our board
+
+#### Communication Performance
+
+Run:
+
+```sh
+$./candump.sh -t can0 -r can1 -i 0x123 -o 0x123 -g 5 -s 8 -l 5 --log candump.txt
+$python latency.py candump.txt
+```
