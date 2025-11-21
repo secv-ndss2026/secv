@@ -66,6 +66,18 @@ After running the above commands, one should now have a `build_s32g399ardb3` fol
 
 Run the following command to test-build. This should download most of the needed dependencies.
 
+Edit the `conf/local.conf` file to disable building features not needed to run SECV. Add the following:
+
+```conf
+DISTRO_FEATURES:remove = "goldvip-cloud"
+DISTRO_FEATURES:remove = "goldvip-containerization"
+#DISTRO_FEATURES:remove = "goldvip-crypto"
+DISTRO_FEATURES:remove = "goldvip-dds"
+DISTRO_FEATURES:remove = "goldvip-ml"
+DISTRO_FEATURES:remove = "goldvip-ota"
+DISTRO_FEATURES:remove = "goldvip-adaptive-autosar"
+```
+
 ```sh
 $ bitbake fsl-image-goldvip
 ```
@@ -94,7 +106,7 @@ https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-aarch64-shenandoah
 https://mirrors.kernel.org/yocto-sources/openjdk8-272-nashorn-jdk8u272-ga.tar.bz2
 ```
 
-After that, the default build should complete successfully.
+After that, the default build should complete successfully. Suppose one gets any errors regarding failure to download required binaries for some reason (say the version is no longer available or the files were moved). In that case, one may simply download the failing files manually and save them in the downloads directory. This may require updating the expected hash in some cases. This can be accomplished by visiting bitbake layer attempting to download the file and updating the hash manually.
 
 #### SECV Baseline Building:
 
