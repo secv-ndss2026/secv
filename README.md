@@ -116,6 +116,9 @@ This is the baseline image against which we compare SECV in terms of performance
 In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board), via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board, such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
 We include scripts to reproduce the LMBench experiments, the communication performance, the system performance (LMBench), and the IVN gateway resource usage. The scripts are identifiable by their filenames.
 
+> **Note: The `local.conf` provided in this repository contains placeholder paths such as `/path/to/s32g3vip/`.
+Please make sure to replace these placeholders with the correct absolute paths corresponding to your own build environment before building the image.**
+
 #### Applying Patches on Docker Image:
 
 Before applying the patches, one needs to switch the user to `secv` as follows:
@@ -168,7 +171,7 @@ After that, one can rebuild the image again to enforce these changes by rerunnin
 bitbake fsl-image-goldvip
 ```
 
-**Note: One has to manually copy the data and scripts folder into the SD card.**
+> **Note: One has to manually copy the data and scripts folder into the SD card.**
 
 ## Evaluation
 
