@@ -96,19 +96,21 @@ After that, the default build should complete successfully.
 
 To build the SECV baseline, one needs to modify the `conf/local.conf` file to include more packages. It should suffice to replace the `local.conf` file with the one we provided in this repository. For this move the `local.conf` file provided under the `s32g3` directory of this repository into the `build/conf/local.conf` directory of your build environment.
 After the image is built, one may find it at build/tmp/deploy/images/s32g3/....sdcard
-This is the baseline image against which we compare SECV in terms of performance, communication latency and resource usage.
-In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board), via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
+This is the baseline image against which we compare SECV in terms of performance, communication latency, and resource usage.
+In our experiments, the EVN platform (running Linux and the built environment) is connected to the IVN gateway (the Cortex-M7 side of the board), via the CAN bus, as shown in the diagram below. This allows us to model a networked system, under which the EVN platform may be another board, such as a Raspberry Pi or any other board capable of handling compute-heavy workloads.
 We include scripts to reproduce the LMBench experiments, the communication performance, the system performance (LMBench), and the IVN gateway resource usage. The scripts are identifiable by their filenames.
 
 #### Applying Patches on Docker Image:
 
-Before apply the patches, one needs to switch the user to `secv` as follows:
+Before applying the patches, one needs to switch the user to `secv` as follows:
 ```sh
-$ cd nxp-yocto-goldvip
-$ source nxp-setup-alb.sh -D fsl-goldvip-no-hv -m s32g399ardb3 -e "meta-aws meta-java meta-vip"
+$ cd /home/secv/nxp-yocto-goldvip
+$ source nxp-setup-alb.sh -D fsl-goldvip-no-hv \
+ -m s32g399ardb3 \
+ -e "meta-aws meta-java meta-vip"
 ```
 
-After then, one needs to move patches into the corresponding yocto layer. 
+Then, one needs to move patches into the corresponding Yocto layer (In this case, the base layer is at `nxp-yocto-goldvip/sources/meta-gvip`). 
 
 For Linux, move the patches to the `sources/meta-gvip/recipes-kernel/linux/linux-s32/patches` directory of your yocto environment. Then modify the file at `sources/meta-gvip/recipes-kernel/linux/linux-s32_%.bbappend` to include the patches as follows:
 To the file, add:
@@ -121,7 +123,7 @@ SRC_URI:append = "\
 "
 ```
 
-For OPTEE, first go to `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee` and follow the step described below.
+For OPTEE, first go to `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee` and follow the steps described below.
 
 ```sh
 mkdir -p optee-os/patches
@@ -149,6 +151,8 @@ After that, one can rebuild the image again to enforce these changes by rerunnin
 ```sh
 bitbake fsl-image-goldvip
 ```
+
+**Note: One has to manually copy the data and scripts folder into the SD card.**
 
 ## Evaluation
 
