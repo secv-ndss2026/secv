@@ -163,15 +163,13 @@ For Arm Trusted Firmware, move the patches to the `~/nxp-yocto-goldvip/sources/m
 SRC_URI:append = "\
     file://secv-secure-monitor.patch \
 ```
-
+**To ensure the data and scripts for running the benchmarks are embedded in the image automatically, replace the `~/nxp-yocto-goldvip/sources/meta-gvip/recipes-goldvip/goldvip-apps/goldvip-apps.bb` with one from this repository at `secv/s32g3/meta-gvip/recipes-goldvip/goldvip-apps/goldvip-apps.bb`. Otherwise, one must manually copy the data and scripts folder to the image file system after building.**
 
 After that, one can rebuild the image again to enforce these changes by rerunning the build command:
 
 ```sh
 bitbake fsl-image-goldvip
 ```
-
-> **Note: One has to manually copy the data and scripts folder into the SD card.**
 
 ## Evaluation
 
