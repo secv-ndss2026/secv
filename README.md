@@ -147,7 +147,7 @@ For OPTEE, first go to `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/op
 ```sh
 mkdir -p optee-os/patches
 ```
-Then move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee/optee-os/patches` directory. Then modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipes-security/optee/optee-os_%.bbappend`
+Then move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-security/optee/optee-os/patches` directory. Then modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipes-security/optee/optee-os_%.bbappend` and add the following:
 
 ```sh
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
@@ -157,11 +157,12 @@ SRC_URI:append = "\
 "
 ```
 
-For Arm Trusted Firmware, move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware` directory. Then same as previous step, modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware_%.bbappend` to include the patch as follows:
+For Arm Trusted Firmware, move the patches to the `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware` directory. Then, same as previous step, modify the file at `~/nxp-yocto-goldvip/sources/meta-gvip/recipe-bsp/arm-trusted-firmware/arm-trusted-firmware_%.bbappend` to include the patch as follows:
 
 ```sh
 SRC_URI:append = "\
     file://secv-secure-monitor.patch \
+"
 ```
 **To ensure the data and scripts for running the benchmarks are embedded in the image automatically, replace the `~/nxp-yocto-goldvip/sources/meta-gvip/recipes-goldvip/goldvip-apps/goldvip-apps.bb` with one from this repository at `secv/s32g3/meta-gvip/recipes-goldvip/goldvip-apps/goldvip-apps.bb`. Otherwise, one must manually copy the data and scripts folder to the image file system after building.**
 
