@@ -176,8 +176,8 @@ index 14be5000c5a0..6d116d8bc752 100644
 +	if(tsk->can_buffer_rec != NULL && 
 +		((uintptr_t)to >= (uintptr_t)tsk->can_buffer_rec) && 
 +		(uintptr_t)to < ((uintptr_t)to + PAGE_SIZE) && !secv_flag_test(SCALL_ANY)){
-+			return n; 
-+	}else
++			//return n; 
++	}//else
 +	{
 +		uaccess_ttbr0_enable();
 +		__actu_ret = __arch_copy_to_user(__uaccess_mask_ptr(to), (from), (n));
@@ -622,7 +622,7 @@ index 000000000000..ee01e3e15012
 +EXPORT_SYMBOL(IDC)
 \ No newline at end of file
 diff --git a/arch/arm64/kernel/vmlinux.lds.S b/arch/arm64/kernel/vmlinux.lds.S
-index 3cd7e76cc562..25f143e13452 100644
+index 3cd7e76cc562..4dc26188295e 100644
 --- a/arch/arm64/kernel/vmlinux.lds.S
 +++ b/arch/arm64/kernel/vmlinux.lds.S
 @@ -150,6 +150,20 @@ PECOFF_FILE_ALIGNMENT = 0x200;
@@ -646,61 +646,52 @@ index 3cd7e76cc562..25f143e13452 100644
  SECTIONS
  {
  	/*
-@@ -180,6 +194,8 @@ SECTIONS
- 			LOCK_TEXT
- 			KPROBES_TEXT
- 			HYPERVISOR_TEXT
+@@ -176,6 +190,8 @@ SECTIONS
+ 			SOFTIRQENTRY_TEXT
+ 			ENTRY_TEXT
+ 			TEXT_TEXT
 +			SECV_TEXT
 +			TASK_TEXT
- 			*(.gnu.warning)
- 	}
- 
-@@ -285,10 +301,20 @@ SECTIONS
- 	__initdata_end = .;
- 	__init_end = .;
- 
-+	.data.rel.ro : { *(.data.rel.ro) }
-+	ASSERT(SIZEOF(.data.rel.ro) == 0, "Unexpected RELRO detected!")
-+
- 	_data = .;
+ 			SCHED_TEXT
+ 			LOCK_TEXT
+ 			KPROBES_TEXT
+@@ -289,6 +305,13 @@ SECTIONS
  	_sdata = .;
  	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_ALIGN)
  
 +	/* --- SECV task_struct pool (.secv.tsk) --- */
-+	.secv.tsk : ALIGN(PAGE_SIZE) {
++	/*.secv.tsk : ALIGN(PAGE_SIZE) {
 +		__secv_tsk_start = .;
 +    	*(.secv.tsk)
 +		__secv_tsk_end = .;
-+	}
++	}*/
 +
  	/*
  	 * Data written with the MMU off but read with the MMU on requires
  	 * cache lines to be invalidated, discarding up to a Cache Writeback
-@@ -313,6 +339,13 @@ SECTIONS
+@@ -313,6 +336,13 @@ SECTIONS
  
  	BSS_SECTION(SBSS_ALIGN, 0, 0)
  
 +	/* --- SECV inner bss (.bss.inner) --- */
-+	.bss.inner (NOLOAD) : ALIGN(PAGE_SIZE) {
++	/*.bss.inner (NOLOAD) : ALIGN(PAGE_SIZE) {
 +    	__inner_bss_start = .;
 +    	*(.bss.inner)
 +    	__inner_bss_end = .;
-+	}
++	}*/
 +
  	. = ALIGN(PAGE_SIZE);
  	init_pg_dir = .;
  	. += INIT_DIR_SIZE;
-@@ -336,9 +369,6 @@ SECTIONS
+@@ -336,7 +366,6 @@ SECTIONS
  		*(.plt) *(.plt.*) *(.iplt) *(.igot .igot.plt)
  	}
  	ASSERT(SIZEOF(.plt) == 0, "Unexpected run-time procedure linkages detected!")
 -
--	.data.rel.ro : { *(.data.rel.ro) }
--	ASSERT(SIZEOF(.data.rel.ro) == 0, "Unexpected RELRO detected!")
+ 	.data.rel.ro : { *(.data.rel.ro) }
+ 	ASSERT(SIZEOF(.data.rel.ro) == 0, "Unexpected RELRO detected!")
  }
- 
- #include "image-vars.h"
-@@ -385,4 +415,4 @@ ASSERT(__relocate_new_kernel_end - __relocate_new_kernel_start <= SZ_4K,
+@@ -385,4 +414,4 @@ ASSERT(__relocate_new_kernel_end - __relocate_new_kernel_start <= SZ_4K,
  ASSERT(KEXEC_CONTROL_PAGE_SIZE >= SZ_4K, "KEXEC_CONTROL_PAGE_SIZE is broken")
  ASSERT(__relocate_new_kernel_start == arm64_relocate_new_kernel,
         "kexec control page does not start with arm64_relocate_new_kernel")
