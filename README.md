@@ -189,6 +189,8 @@ Then a prompt will appear asking for configuration input. For our experiment, us
 
 After 20~50 minutes, the result is stored at `/usr/share/lmbench/results/`. To enhance readability, we provide a script that presents the results in a well-organized manner.
 
+> **Note: To measure the results for `mmap, receive, send`**: Compile and run the `.c` programs in the `scripts` directory.
+
 ```sh
 $cd /usr/share/lmbench/results
 $/home/root/scripts/show_lmbench_results.sh <result_file.0>
