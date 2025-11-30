@@ -193,7 +193,7 @@ After 20~50 minutes, the result is stored at `/usr/share/lmbench/results/`. To e
 $cd /usr/share/lmbench/results
 $/home/root/scripts/show_lmbench_results.sh <result_file.0>
 ```
-> **Note: To measure the results for `mmap, receive, send`**: Compile and run the `.c` programs in the `scripts` directory.
+> **Note: To measure the results for `mmap, receive, send`**: Compile and run the `.c` programs in the `scripts` directory. Please use the `gcc` compiler as it is currently installed in the image.
 #### Communication Performance (Microbenchmarks)
 
 Run:
